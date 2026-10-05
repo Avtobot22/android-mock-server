@@ -1,0 +1,21 @@
+# macOS and IDE
+.DS_Store
+.idea/
+*.iml
+
+# Gradle, Kotlin and Android build output
+.gradle/
+.kotlin/
+build/
+.cxx/
+captures/
+local.properties
+*.apk
+*.aab
+
+# Local secrets
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
