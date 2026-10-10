@@ -1,34 +1,42 @@
 # Android Mock Server
 
-Библиотека HTTP-моков для Android/JVM: приложение описывает ответы в Kotlin DSL и передаёт движок своему OkHttp или Ktor Client. Подходит для разработки без backend, демонстрационных сценариев и тестов клиентского кода.
+Библиотека HTTP-моков для Android и JVM. В Kotlin-коде вы описываете, какой ответ должен получить запрос, и подключаете правила к OkHttp или Ktor Client. Так можно разрабатывать приложение без готового бэкенда, показывать демо и проверять клиентский код.
 
-Моки работают внутри процесса: библиотека не открывает порт и перехватывает только явно настроенные клиенты. Несовпавший запрос завершается типизированной ошибкой без выхода в сеть. Чтобы получить HTTP `404`, задайте правило с `status(404)`.
+Библиотека работает внутри приложения и не открывает сетевой порт. Она обрабатывает запросы только тех клиентов, к которым подключена. Если подходящего правила нет, запрос завершается ошибкой `NoMatchingRule` без обращения в сеть. HTTP `404` или `503` нужно задать отдельным ответом в правиле.
 
 ## Содержание
 
+- [Как обрабатывается запрос](#как-обрабатывается-запрос)
 - [Подключение](#подключение)
-- [Быстрый старт](#быстрый-старт)
-- [Правила и сопоставление запросов](#правила-и-сопоставление-запросов)
-- [Ответы](#ответы)
-- [Сценарии round-robin](#сценарии-round-robin)
-- [Динамические ответы](#динамические-ответы)
-- [Обновление правил во время работы](#обновление-правил-во-время-работы)
-- [Прямое использование ядра](#прямое-использование-ядра)
-- [OkHttp и Retrofit](#okhttp-и-retrofit)
-- [Ktor Client](#ktor-client)
-- [Лимиты и ошибки](#лимиты-и-ошибки)
-- [Сборка, sample и проверки](#сборка-sample-и-проверки)
+- [Быстрый старт с OkHttp и Retrofit](#быстрый-старт-с-okhttp)
+- [Ktor Client](#подключение-ktor-client)
+- [Правила и ответы](#правила-и-ответы)
+- [Тела из Android assets](#тела-ответов-из-android-assets)
+- [Обновление правил](#обновление-правил)
+- [Ограничения и ошибки](#ограничения-и-ошибки)
+- [Сборка и проверки](#сборка-и-проверки)
+
+## Что есть в проекте
+
+| Модуль | Что делает |
+| --- | --- |
+| `mock-core` | Хранит правила, сопоставляет запросы, выбирает ответы и ведёт счётчики сценариев. Содержит Kotlin DSL; не зависит от Android, OkHttp и Ktor. |
+| `mock-okhttp` | Подключает правила через interceptor OkHttp. Работает и с Retrofit, если передать ему этот клиент. |
+| `mock-ktor` | Создаёт Ktor `MockEngine` для отдельного `HttpClient`. |
+| `sample` | Показывает подключение обоих клиентов и загрузку тела ответа из Android assets. Содержит тест упакованного файла. |
+
+## Как обрабатывается запрос
+
+1. Приложение создаёт `RuleEngine`, описывает правила через `mockRules` и публикует их через `replaceRules`.
+2. Адаптер OkHttp или Ktor переводит запрос в снимок: метод, URL, заголовки и доступные байты тела.
+3. Движок ищет первое подходящее правило и выбирает ответ. Для последовательности ответов он также увеличивает счётчик сценария.
+4. Адаптер выдерживает заданную задержку и возвращает ответ в привычном формате клиента. Если правила нет, возвращает ошибку вызова.
+
+Приложение продолжает обращаться к тому же API своего сетевого клиента. Мок определяется правилами, а не отдельной функцией загрузки данных. Движок и клиенты сохраняйте на время нужного сценария: создание нового движка начинает его счётчики с нуля.
 
 ## Подключение
 
-| Модуль | Назначение |
-| --- | --- |
-| `mock-core` | Снимки запросов, DSL, правила, решения и счётчики сценариев. JVM-модуль без Android API и сетевых клиентов. |
-| `mock-okhttp` | Application interceptor для OkHttp; Retrofit использует тот же настроенный клиент. |
-| `mock-ktor` | Ktor `MockEngine`, который становится транспортом отдельного `HttpClient`. |
-| `sample` | Android composition root с debug asset и instrumentation test. |
-
-Публикация в Maven-репозиторий в проекте не настроена. Для использования подключите исходные модули к своей Gradle-сборке. Пример структуры:
+Публикация в Maven-репозиторий пока не настроена. Подключите нужные модули из исходников. Для примера ниже репозитории лежат рядом:
 
 ```text
 workspace/
@@ -36,7 +44,7 @@ workspace/
 └── android-mock-server/
 ```
 
-Добавьте в `your-app/settings.gradle.kts` нужные проекты; существующие настройки repositories и plugins сохраните:
+В `your-app/settings.gradle.kts` добавьте проекты:
 
 ```kotlin
 include(":mock-core", ":mock-okhttp", ":mock-ktor")
@@ -45,7 +53,7 @@ project(":mock-okhttp").projectDir = file("../android-mock-server/mock-okhttp")
 project(":mock-ktor").projectDir = file("../android-mock-server/mock-ktor")
 ```
 
-Для выбранных модулей нужны `google()` и `mavenCentral()` в repositories. Модули используют JDK toolchain `17` и получают версии Kotlin plugins от корневой сборки приложения. Добавьте недостающие объявления в корневой `build.gradle.kts`:
+Если используете только OkHttp, `mock-ktor` можно не подключать, и наоборот. В настройках репозиториев нужны `google()` и `mavenCentral()`. Модули используют JDK toolchain 17; версии Kotlin-плагинов задаёт корневая сборка. В корневом `build.gradle.kts` добавьте недостающие объявления:
 
 ```kotlin
 plugins {
@@ -54,32 +62,26 @@ plugins {
 }
 ```
 
-Существующие объявления Android/Kotlin plugins сохраните и согласуйте их версии: `kotlin("android")` также должен использовать `2.3.20`. Для Android-сборки с этим Kotlin проверена связка AGP `8.13.2` и Gradle `8.13`. Runtime `kotlinx.serialization 1.11.0` указан в зависимостях `mock-core`; при выборе другой версии Kotlin согласуйте compiler plugins и runtime во всех подключённых модулях.
+Сохраните существующие Android-плагины и согласуйте версии Kotlin: `kotlin("android")` в этой конфигурации тоже использует `2.3.20`. Версии всех компонентов репозитория приведены [ниже](#сборка-и-проверки). Подключение к реальному приложению-потребителю ещё не проверено.
 
-Для Android-моков только в debug-варианте добавьте в `app/build.gradle.kts`:
+В Android-приложении, где моки нужны только в debug-сборке, добавьте в `app/build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    // Реальный клиент нужен и в release; если он уже подключён, сохраните свою версию.
+    // Клиент нужен и в release. Если он уже подключён, сохраните свою зависимость.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     debugImplementation(project(":mock-core"))
     debugImplementation(project(":mock-okhttp"))
-    // Нужно только при использовании Ktor Client:
-    debugImplementation(project(":mock-ktor"))
+    // Для Ktor вместо mock-okhttp:
+    // debugImplementation(project(":mock-ktor"))
 }
 ```
 
-В JVM-проекте или варианте, где моки нужны постоянно, используйте `implementation(project(...))`. Отдельного Retrofit runtime-модуля нет. Сам Retrofit и нужный converter подключает приложение.
+В JVM-проекте используйте `implementation(project(...))`. Retrofit и его converter подключает приложение; отдельного модуля для Retrofit нет.
 
-### Выбор реального клиента и моков через source sets
+## Быстрый старт с OkHttp
 
-Код приложения получает обычный `OkHttpClient` через свою DI-фабрику. Реализацию фабрики можно разместить отдельно в `src/debug` и `src/release`: тогда release-код не зависит от mock-модулей. Фабрика ниже дополнительно позволяет в debug выбрать реальную сеть через `useMocks = false`; этот выбор делается при создании клиента.
-
-Если общий код находится в `src/main`, передавайте туда клиент или интерфейс своего repository. Типы `RuleEngine` и `MockInterceptor` при `debugImplementation` остаются в debug-коде.
-
-## Быстрый старт
-
-Законченный пример для `app/src/debug/kotlin/com/example/network/ApiClient.kt`:
+Создайте `app/src/debug/kotlin/com/example/network/ApiClient.kt`:
 
 ```kotlin
 package com.example.network
@@ -88,32 +90,35 @@ import dev.androidmock.core.dsl.mockRules
 import dev.androidmock.core.engine.RuleEngine
 import dev.androidmock.okhttp.MockInterceptor
 import okhttp3.OkHttpClient
-import okhttp3.Request
 
-fun createApiClient(useMocks: Boolean = true): OkHttpClient {
-    val builder = OkHttpClient.Builder()
-    if (useMocks) {
-        val engine = RuleEngine()
-        val rules = mockRules {
-            rule(id = "users", path = "/v1/users") {
-                match {
-                    method("GET")
-                    host("api.example.test")
-                    query { containsValue("page", "1") }
-                }
-                respond {
-                    header("Content-Type", "application/json; charset=utf-8")
-                    bodyText("""{"users":[{"id":1,"name":"Ada"}]}""")
-                }
+fun createApiClient(): OkHttpClient {
+    val engine = RuleEngine()
+    val rules = mockRules {
+        rule(id = "users", path = "/v1/users") {
+            match {
+                method("GET")
+                host("api.example.test")
+                query { containsValue("page", "1") }
+            }
+            respond {
+                header("Content-Type", "application/json; charset=utf-8")
+                bodyText("""{"users":[{"id":1,"name":"Ada"}]}""")
             }
         }
-        engine.replaceRules(rules)
-        builder.addInterceptor(MockInterceptor(engine))
     }
-    return builder.build()
+    engine.replaceRules(rules)
+    return OkHttpClient.Builder()
+        .addInterceptor(MockInterceptor(engine))
+        .build()
 }
+```
 
-// Синхронный execute() вызывайте на фоновом потоке приложения.
+Обычный запрос к этому клиенту получит заданный JSON. Синхронный `execute()` на Android вызывайте вне главного потока:
+
+```kotlin
+import okhttp3.OkHttpClient
+import okhttp3.Request
+
 fun loadUsers(client: OkHttpClient): String {
     val request = Request.Builder()
         .url("https://api.example.test/v1/users?page=1")
@@ -125,7 +130,7 @@ fun loadUsers(client: OkHttpClient): String {
 }
 ```
 
-В `app/src/release/kotlin/com/example/network/ApiClient.kt` фабрика с тем же именем:
+Для release создайте `app/src/release/kotlin/com/example/network/ApiClient.kt` с той же фабрикой:
 
 ```kotlin
 package com.example.network
@@ -135,67 +140,108 @@ import okhttp3.OkHttpClient
 fun createApiClient(): OkHttpClient = OkHttpClient.Builder().build()
 ```
 
-Общий код использует `createApiClient()` и сохраняет полученный клиент в своём DI scope. В debug будет выбран мок, в release — реальный транспорт. Для runtime-переключения создайте другой клиент и обновите DI binding; уже созданный клиент сохраняет свой адаптер.
+Общий код в `src/main` вызывает `createApiClient()` и сохраняет клиент для дальнейших запросов. Типы библиотеки моков остаются в `src/debug`. Если нужно переключать моки и реальную сеть во время работы, создавайте другой клиент и передавайте его вызывающему коду.
 
-`mockRules` возвращает `List<Rule>` и ничего не публикует. Публикация происходит в `engine.replaceRules(rules)`. Один engine можно передать нескольким клиентам: они будут делить таблицу и счётчики. Разные экземпляры engine независимы.
+`MockInterceptor` подключается через `addInterceptor`. Interceptors перед ним могут изменить запрос; расположенные после него не вызываются. Для Retrofit передайте этот `OkHttpClient` в `.client(client)` при создании `Retrofit.Builder`. Ответ из `bodyJson` не заменяет converter, который Retrofit использует для чтения DTO.
 
-## Правила и сопоставление запросов
-
-Каждое `rule(id, path)` задаёт непустой уникальный ID, точный encoded path и ровно один ответ: `respond`, `roundRobin` или `respondWith`. Путь обязателен, начинается с `/` и не содержит query или fragment. Без блока `match` правило подходит ко всем методам и хостам с этим путём.
-
-Порядок выбора: больший `priority` первым, затем порядок регистрации. Приоритет по умолчанию `0`. Возвращается первое совпадение; ошибка его callback или ответа завершает запрос, поиск следующего правила не продолжается.
-
-Фрагмент внутри `mockRules { ... }`:
+Например, сервис Retrofit может получать тот же ответ `/v1/users?page=1`:
 
 ```kotlin
-rule("create-order", "/v1/orders") {
+import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
+import retrofit2.Response
+import retrofit2.Retrofit
+import retrofit2.http.GET
+
+interface UsersApi {
+    @GET("v1/users?page=1")
+    suspend fun users(): Response<ResponseBody>
+}
+
+fun createUsersApi(client: OkHttpClient): UsersApi = Retrofit.Builder()
+    .baseUrl("https://api.example.test/")
+    .client(client)
+    .build()
+    .create(UsersApi::class.java)
+```
+
+Здесь используется сырое `ResponseBody`, поэтому JSON-converter не нужен. Для метода, возвращающего DTO, настройте converter приложения. Прочитанное тело ответа закрывайте обычным способом.
+
+## Подключение Ktor Client
+
+Передайте тот же `RuleEngine` в `mockKtorEngine` при создании клиента:
+
+```kotlin
+import dev.androidmock.core.engine.RuleEngine
+import dev.androidmock.ktor.mockKtorEngine
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
+
+fun createMockKtor(engine: RuleEngine): HttpClient = HttpClient(
+    mockKtorEngine(engine)
+) {
+    expectSuccess = false
+    // Здесь можно устанавливать плагины клиента приложения.
+}
+
+suspend fun loadKtorUsers(client: HttpClient): String =
+    client.get("https://api.example.test/v1/users?page=1").bodyAsText()
+```
+
+Сначала опубликуйте правила через `engine.replaceRules(...)`. Ktor-клиент получает их как свой единственный транспорт; к уже созданному клиенту с реальным engine этот адаптер не добавляется. При завершении работы вызовите `client.close()`.
+
+Один `RuleEngine` можно передать нескольким клиентам: они будут использовать общие правила и счётчики. Разные экземпляры независимы.
+
+## Правила и ответы
+
+`mockRules { ... }` строит и проверяет `List<Rule>`. Он не меняет работающий движок: готовый список нужно передать в `engine.replaceRules(rules)`.
+
+У каждого правила есть уникальный непустой ID и точный путь, например `/v1/users`. Путь начинается с `/` и не содержит query или fragment. В `match` доступны условия для метода, схемы, хоста, порта, query, заголовков и байтов тела. Все условия должны выполняться одновременно; без `match` правило подходит к любому запросу с указанным путём.
+
+Правила проверяются по убыванию `priority`, затем в порядке добавления. По умолчанию приоритет равен `0`. Выбирается первое совпавшее правило. Ошибка его обработчика завершает запрос; поиск другого ответа не продолжается.
+
+### Условия запроса и приоритет
+
+Условия помогают различать запросы к одному пути: например, создание заказа с нужным заголовком и телом. Следующий фрагмент размещается внутри `mockRules { ... }`:
+
+```kotlin
+rule("create-preview-order", "/v1/orders") {
     priority(20)
     match {
         method("POST")
         scheme("https")
         host("api.example.test")
         port(443)
-        query {
-            containsValue("tag", "new")
-            containsValue("preview", null)
-        }
+        query { containsValue("preview", "true") }
         headers { contains("Accept", "application/json") }
         bodyExactUtf8("create")
     }
-    respond { status(201); bodyText("created") }
+    respond {
+        status(201)
+        header("Content-Type", "application/json")
+        bodyText("""{"orderId":42}""")
+    }
+}
+rule("other-orders", "/v1/orders") {
+    respond { status(400) }
 }
 ```
 
-Все условия, включая путь, соединяются через **И**. Повторные вызовы `match` добавляют условия, а не заменяют их. Например, два вызова `method("GET")` и `method("POST")` внутри одного правила не образуют альтернативу.
+Первое правило получит запрос `POST https://api.example.test/v1/orders?preview=true` с указанными заголовком и телом. Другие запросы к `/v1/orders` получат `400` от второго правила. Больший приоритет позволяет поставить частный случай перед общим. Для проверки тела в OkHttp нужно включить его захват, как показано [ниже](#ограничения-и-ошибки).
 
-| Операция | Смысл |
+| Условие | Что сравнивается |
 | --- | --- |
-| `method(value)` | Точное совпадение метода после приведения к верхнему регистру. |
-| `scheme(value)` | `http` или `https`, без учёта регистра. |
-| `host(value)` | Точное совпадение хоста без учёта регистра. |
-| `port(value)` | Эффективный порт `1..65535`; без явного порта URL используются `80` для HTTP и `443` для HTTPS. |
-| `query { containsValue(name, value) }` | Существует хотя бы одна точно совпавшая пара. |
-| `query { allValues(name, value) }` | Имя присутствует и все его значения равны заданному. |
-| `query { exactList(...) }` | Совпадает весь упорядоченный список `QueryEntry`, включая повторы. |
-| `headers { contains(name, value) }` | Среди повторов заголовка есть точное значение. Регистр имени не учитывается; регистр значения учитывается. |
-| `bodyExactBytes(bytes)` / `bodyExactUtf8(text)` | Доступное тело точно равно байтам; текст кодируется UTF-8. |
-| `bodyContainsBytes(bytes)` / `bodyContainsUtf8(text)` | Доступное тело содержит последовательность байтов. |
-| `matching { request -> ... }` | Пользовательский predicate в блоке правила, добавленный через И к остальным условиям. |
+| `method`, `scheme`, `host`, `port` | Метод, схема HTTP(S), хост и эффективный порт URL. Метод нормализуется в верхний регистр, схема и хост сравниваются без учёта регистра. |
+| `query { containsValue(name, value) }` | Есть хотя бы одна указанная пара. |
+| `query { allValues(name, value) }` | Параметр есть, и все его значения равны указанному. |
+| `query { exactList(...) }` | Совпадает весь список параметров, включая порядок и повторы. |
+| `headers { contains(name, value) }` | Есть заголовок с таким значением. Регистр имени не учитывается, значения сравниваются точно. |
+| `bodyExactUtf8(text)` / `bodyExactBytes(bytes)` | Всё доступное тело равно указанным байтам. |
+| `bodyContainsUtf8(text)` / `bodyContainsBytes(bytes)` | Тело содержит указанную последовательность байтов. |
+| `matching { request -> ... }` | Выполняется дополнительная проверка приложения. |
 
-Для **ИЛИ** используйте несколько правил либо predicate. Фрагмент внутри `mockRules { ... }`:
-
-```kotlin
-rule("read-users", "/v1/users") {
-    matching { request -> request.method == "GET" || request.method == "HEAD" }
-    respond { bodyText("users") }
-}
-```
-
-### URL, query и доступность тела
-
-Ядро принимает HTTP(S)-URL без user-info и fragment. Путь сравнивается в encoded-виде: hex-цифры percent escapes приводятся к верхнему регистру, но `/a` и `/%61` остаются разными путями. Regex и prefix/suffix path в DSL отсутствуют.
-
-Query декодируется как UTF-8; `+` остаётся плюсом. Имена и значения чувствительны к регистру. `?flag` даёт `null`, а `?flag=` — пустую строку. Для URL `?tag=a&tag=b&flag&empty=` условие полного совпадения выглядит так; добавьте импорт `dev.androidmock.core.request.QueryEntry`:
+Например, для точного query `?tag=a&tag=b&flag&empty=` добавьте импорт `dev.androidmock.core.request.QueryEntry` и внутри `match` задайте:
 
 ```kotlin
 query {
@@ -208,32 +254,40 @@ query {
 }
 ```
 
-Это фрагмент блока `match`. Если порядок query не важен, задавайте отдельные `containsValue`/`allValues` вместо `exactList`.
+`null` означает параметр без `=`, пустая строка — пустое значение после `=`. Имена и значения query чувствительны к регистру; `+` остаётся плюсом. Путь сравнивается в закодированном виде: `/a` и `/%61` различаются.
 
-Body predicates работают только с `RequestBodySnapshot.Buffered`. При `Absent` или `Unavailable` они возвращают `false`; пустой буфер отличается от отсутствующего тела. JSON сравнивается как байты, без нормализации пробелов и порядка полей. Политику захвата исходящего тела настраивает [адаптер](#okhttp-и-retrofit).
+Повторные блоки `match` добавляют условия. Два вызова `method("GET")` и `method("POST")` не задают альтернативу: используйте отдельные правила или `matching { it.method == "GET" || it.method == "POST" }`.
 
-## Ответы
+### Статус, заголовки и тело ответа
 
-В `respond { ... }` и в каждом `roundRobin.response { ... }` доступны одинаковые операции:
+Через `respond` удобно задать постоянный ответ: успешную загрузку, пустой результат или HTTP-ошибку. В каждом правиле нужен ровно один вариант: `respond`, `roundRobin` или `respondWith`.
 
-| Операция | Поведение |
+В блоке `respond` доступны:
+
+| Операция | Результат |
 | --- | --- |
-| `status(code)` | HTTP-статус `200..599`; по умолчанию `200`. |
-| `header(name, value)` | Добавляет заголовок; повторные имена и значения сохраняются. |
-| `bodyText(text)` | UTF-8 bytes. `Content-Type` задаётся вручную. |
-| `bodyBytes(bytes)` | Конечный массив байтов, скопированный в ответ. |
-| `bodyJson(value)` | Сериализация готовой модели в UTF-8 JSON. |
-| `bodyJson<Model> { ... }` | Заполнение модели через поля JSON с проверкой сериализатором. |
-| `bodyAsset(path)` | Однократное чтение тела через `BodyAssetResolver` при построении правил. |
-| `delay(duration)` | Задержка доставки ответа; по умолчанию нулевая. |
+| `status(code)` | Статус `200..599`, по умолчанию `200`. |
+| `header(name, value)` | Добавление заголовка. Повторы сохраняются. |
+| `bodyText(text)` | Текст в UTF-8; `Content-Type` задаётся отдельно. |
+| `bodyBytes(bytes)` | Бинарное тело, например изображение или файл. |
+| `bodyJson(...)` | JSON из сериализуемой модели. |
+| `bodyAsset(path)` | Тело из файла через resolver приложения. |
+| `delay(duration)` | Задержка перед доставкой ответа. |
 
-Тело можно задать один раз. Без body-операции оно отсутствует. Для `204` и `304` тело запрещено даже в виде пустого `bodyBytes`; используйте только `status(...)`. `HEAD` получает пустое тело на уровне адаптера, хотя правило может содержать body.
+Например, пустой ответ задаётся так, внутри `mockRules`:
 
-### JSON из готовой модели и частичное заполнение
+```kotlin
+rule("delete-order", "/v1/orders/42") {
+    match { method("DELETE") }
+    respond { status(204) }
+}
+```
 
-Модели приложения должны иметь сгенерированный сериализатор. Примените `kotlin("plugin.serialization")` той же версии, что Kotlin в приложении; в текущей конфигурации модулей это `2.3.20`. Проект использует совместимый runtime `kotlinx.serialization 1.11.0`.
+Для `204` и `304` тело запрещено, включая пустой `bodyBytes`. Если тело не задано, оно отсутствует. Для `HEAD` адаптер возвращает статус и заголовки без байтов тела.
 
-Пример отдельного Kotlin-файла с двумя способами построения правил:
+### JSON из модели
+
+`bodyJson` сериализует готовую модель либо позволяет заполнить её поля в DSL. Подключите к модулю с моделями плагин `kotlin("plugin.serialization")` той же версии, что Kotlin.
 
 ```kotlin
 import dev.androidmock.core.dsl.mockRules
@@ -241,159 +295,88 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class ProfileDto(val city: String, val verified: Boolean)
-
-@Serializable
 data class UserDto(
     @SerialName("user_id") val id: Int,
     val name: String = "Guest",
-    val profile: ProfileDto,
     val roles: List<String>,
-    val nickname: String?,
 )
 
 val jsonRules = mockRules {
-    rule("user-ready", "/v1/users/1") {
+    rule("ready-user", "/v1/users/1") {
         respond {
-            bodyJson(
-                UserDto(1, "Ada", ProfileDto("Tomsk", true), listOf("reader"), null)
-            )
+            bodyJson(UserDto(1, "Ada", listOf("reader")))
         }
     }
-    rule("user-partial", "/v1/users/2") {
+    rule("partial-user", "/v1/users/2") {
         respond {
             bodyJson<UserDto> {
                 field("user_id", 2)
-                objectField("profile") { field("city", "Tomsk") }
-                field("nickname", null)
             }
         }
     }
 }
 ```
 
-Во втором правиле `name` будет `"Guest"` из Kotlin default модели, `profile.verified` — `false`, `roles` — пустым списком. Порядок заполнения: **явное поле → Kotlin default → стабильное значение по типу**. `field` принимает JSON-имя из `@SerialName`. `objectField` заполняет вложенный объект по его дескриптору; можно также передать готовую модель через `field("profile", ProfileDto(...))`.
+Первое правило использует готовую модель. Во втором можно задать только поля, нужные для сценария: `name` будет `"Guest"`, а `roles` — пустым списком. Сначала применяется явно заданное поле, затем значение по умолчанию из модели, затем стабильное значение по типу. `field` принимает JSON-имя из `@SerialName`; для вложенных объектов есть `objectField`. Неверные типы, неизвестные и повторные поля отклоняются при построении правил. Подробности заполнения и его ограничения описаны в [документе DSL](docs/android-mock/03-mock-dsl.md#json-ответ-по-serializable-модели).
 
-| Пропущенное обязательное поле без Kotlin default | Значение |
-| --- | --- |
-| Целые числа / дробные числа | `0` / `0.0` |
-| `Boolean`, `String`, `Char` | `false`, `""`, `\u0000` |
-| Nullable | `null` |
-| List / Map | Пустая коллекция |
-| Enum | Первый объявленный элемент |
-| Вложенная модель | Рекурсивно заполненные обязательные поля |
+`bodyJson` добавляет `Content-Type: application/json; charset=utf-8`, если заголовок не задан явно. JSON превращается в байты до публикации правил.
 
-Необязательные поля оставляются декодеру модели, чтобы применился её Kotlin default. Полиморфный, контекстный, inline/custom тип или обязательный цикл, для которого значение нельзя вывести, требует явного заполнения. Неизвестные и повторные поля, неверный тип или невозможность декодировать модель дают `ConfigurationException` при построении правил.
+### Последовательность ответов и задержка
 
-Обе формы `bodyJson` добавляют `Content-Type: application/json; charset=utf-8`, если такого заголовка ещё нет. Явное значение сохраняется независимо от регистра имени. JSON включает Kotlin defaults и явные `null`: сериализатор настроен с `encodeDefaults = true` и `explicitNulls = true`. Для своего сериализатора доступны `bodyJson(value, serializer)`, `bodyJson(serializer) { ... }` и `field(name, value, serializer)`.
-
-JSON строится до публикации: engine хранит готовые bytes и не сериализует модель во время запроса.
-
-### Тела из Android assets
-
-Правила держите, например, в `app/src/debug/kotlin`, а файлы ответов — в `app/src/debug/assets/mock/bodies`. Файл `receipt.json`:
-
-```json
-{"orderId":42}
-```
-
-Resolver связывает относительный путь DSL с доверенным префиксом assets и ограничивает чтение. Пример функции для debug source set:
-
-```kotlin
-import android.content.Context
-import dev.androidmock.core.dsl.BodyAssetResolver
-import dev.androidmock.core.dsl.mockRules
-import dev.androidmock.core.engine.EngineLimits
-import dev.androidmock.core.rule.Rule
-import java.io.ByteArrayOutputStream
-
-fun loadAssetRules(context: Context, limits: EngineLimits = EngineLimits()): List<Rule> {
-    val resolver = BodyAssetResolver { path ->
-        context.assets.open("mock/bodies/$path").use { input ->
-            val output = ByteArrayOutputStream()
-            val chunk = ByteArray(8192)
-            while (true) {
-                val count = input.read(chunk)
-                if (count < 0) break
-                require(count <= limits.maxResponseBytes - output.size()) {
-                    "Mock asset exceeds response limit"
-                }
-                output.write(chunk, 0, count)
-            }
-            output.toByteArray()
-        }
-    }
-    return mockRules(bodyAssets = resolver) {
-        rule("receipt", "/v1/receipt") {
-            match { method("GET") }
-            respond {
-                header("Content-Type", "application/json")
-                bodyAsset("receipt.json")
-            }
-        }
-    }
-}
-```
-
-Вызов `loadAssetRules` выполняйте вне главного потока, затем публикуйте результат через `engine.replaceRules(...)`. Чтение синхронное и происходит при построении правил. `decide` после публикации не открывает assets; поток уже закрыт, байты принадлежат ответу.
-
-DSL отклоняет абсолютные пути, `.`/`..`, обратную косую черту и пустые сегменты. Отсутствующий resolver или ошибка чтения дают `ConfigurationException`. В JVM-тесте тот же интерфейс может возвращать bytes из памяти или test resources. Не используйте `InputStream.available()` как размер файла.
-
-### Задержка
+`roundRobin` выдаёт ответы по кругу. Пример сначала вернёт `503`, затем `201`, затем снова `503`:
 
 ```kotlin
 import dev.androidmock.core.dsl.mockRules
 import kotlin.time.Duration.Companion.milliseconds
 
-val delayedRules = mockRules {
-    rule("slow-users", "/v1/users") {
-        respond {
-            delay(250.milliseconds)
-            bodyText("users")
-        }
-    }
-}
-```
-
-`delay` должна быть конечной и неотрицательной. Ядро выбирает ответ сразу; ожидание реализуют адаптеры перед доставкой. Прямой вызов `engine.decide` не ждёт. Для OkHttp ожидание блокирует поток вызова, поэтому синхронные запросы выполняйте вне Android main thread. Ktor ожидает через отменяемый coroutine `delay`.
-
-## Сценарии round-robin
-
-Последовательность циклическая: после последнего ответа выбирается первый. Непустой список ответов обязателен. Пример отдельного набора правил:
-
-```kotlin
-import dev.androidmock.core.dsl.mockRules
-import dev.androidmock.core.rule.ScenarioKey
-
-val checkoutRules = mockRules {
-    rule("checkout-read", "/v1/checkout") {
-        match { method("GET") }
-        roundRobin {
-            scenarioKey(ScenarioKey.Shared("checkout"))
-            response { bodyText("read-first") }
-            response { bodyText("read-second") }
-        }
-    }
-    rule("checkout-write", "/v1/checkout") {
+val orderRules = mockRules {
+    rule("create-order", "/v1/orders") {
         match { method("POST") }
         roundRobin {
-            scenarioKey(ScenarioKey.Shared("checkout"))
-            response { status(503); bodyText("write-first") }
-            response { status(201); bodyText("write-second") }
+            response {
+                status(503)
+                bodyText("try again")
+            }
+            response {
+                status(201)
+                delay(250.milliseconds)
+                bodyText("created")
+            }
         }
     }
 }
 ```
 
-Без `scenarioKey` используется собственный `ScenarioKey.PerRule(RuleId(...))`. В примере оба правила делят один курсор `Shared("checkout")`: запросы `GET → POST → GET` получают слоты `0 → 1 → 2` и ответы `read-first → write-second → read-first`. Каждый responder выбирает `slot % responses.size` из своего списка.
+Это позволяет проверить повтор запроса после ошибки. Последовательность не заканчивается и не закрепляет последний ответ: она повторяется по кругу. `engine.resetScenarios()` начинает все последовательности заново. Слот выбирается атомарно и считается использованным даже при последующей отмене запроса; порядок доставки параллельных ответов не гарантируется.
 
-`Shared("checkout")` и `PerRule(RuleId("checkout"))` различаются. Ключ статичен для правила: method, host, query и callback не выбирают его на каждом запросе. Разные engine не разделяют курсоры даже при одинаковом имени ключа.
+У каждого правила свой счётчик. Если несколько запросов должны продвигать один сценарий, задайте общий ключ. Добавьте импорт `dev.androidmock.core.rule.ScenarioKey`, а внутри `mockRules` опишите:
 
-Выбор слота атомарен. Для параллельных запросов порядок доставки ответов не обещан. Слот расходуется в момент выбора ответа и не возвращается при отмене клиента. `engine.resetScenarios()` начинает все сценарии заново; точечного `resetScenarios(key)` в API нет. Сброс затронутых ключей при `upsertRule`/`removeRule` описан [ниже](#обновление-правил-во-время-работы).
+```kotlin
+rule("checkout-read", "/v1/checkout") {
+    match { method("GET") }
+    roundRobin {
+        scenarioKey(ScenarioKey.Shared("checkout"))
+        response { bodyText("read-first") }
+        response { bodyText("read-second") }
+    }
+}
+rule("checkout-write", "/v1/checkout") {
+    match { method("POST") }
+    roundRobin {
+        scenarioKey(ScenarioKey.Shared("checkout"))
+        response { bodyText("write-first") }
+        response { bodyText("write-second") }
+    }
+}
+```
 
-## Динамические ответы
+Для `GET → POST → GET` общий счётчик выберет слоты `0 → 1 → 2`: ответы будут `read-first → write-second → read-first`. Каждое правило берёт элемент из своего списка по общему номеру. Другой движок с тем же именем ключа имеет независимый счётчик.
 
-`respondWith` получает неизменяемый снимок запроса и `ResponderContext`, у которого публично доступен `ruleId`. Он возвращает обычный `ResponseSpec`:
+Задержку выполняет адаптер: OkHttp блокирует поток вызова, Ktor использует отменяемую coroutine `delay`. Прямой `engine.decide` не ждёт. Задержка должна быть конечной и неотрицательной.
+
+### Ответ, зависящий от запроса
+
+`respondWith` получает снимок запроса и контекст с ID выбранного правила. Используйте его, если один ответ нужно вычислять для разных параметров:
 
 ```kotlin
 import dev.androidmock.core.dsl.mockRules
@@ -418,105 +401,101 @@ val dynamicRules = mockRules {
 }
 ```
 
-И `matching`, и `respondWith` выполняются синхронно внутри `decide`, могут вызываться конкурентно и должны быть быстрыми и потокобезопасными. Не выполняйте в них I/O, блокирующее ожидание или изменение таблицы правил. Контекст не предоставляет доступ к произвольному сценарию, клиенту или сети. Пользовательский код вызывается после проверки пути и вне блокировки публикации.
+`/v1/price?currency=EUR` вернёт `rule=price; currency=EUR`, запрос без параметра — `rule=price; currency=USD`. Функции `matching` и `respondWith` выполняются синхронно и могут вызываться одновременно: они должны быть быстрыми, потокобезопасными и без I/O. Каждый вычисленный ответ проверяется по контракту и лимиту перед возвратом клиенту.
 
-Исключение callback даёт `MockFailure.CallbackFailure`; `CancellationException` пробрасывается без преобразования. Каждый вычисленный `ResponseSpec` проверяется перед возвратом. Невалидный результат даёт `MockFailure.InvalidResponse` и не приводит к выбору другого правила.
+## Тела ответов из Android assets
 
-## Обновление правил во время работы
+Правила храните в `src/debug/kotlin`, файлы ответов — например, в `src/debug/assets/mock/bodies`. Вызов `bodyAsset("receipt.json")` получает байты через переданный приложением `BodyAssetResolver`:
 
-Engine сохраняйте в DI scope приложения или теста и обновляйте тот же экземпляр, который передан клиентам. Пример самостоятельного Kotlin-кода:
+```kotlin
+import dev.androidmock.core.dsl.BodyAssetResolver
+import dev.androidmock.core.dsl.mockRules
+
+// resolver читает файл из assets и ограничивает размер прочитанных данных.
+fun receiptRules(resolver: BodyAssetResolver) = mockRules(bodyAssets = resolver) {
+    rule("receipt", "/v1/receipt") {
+        match { method("GET") }
+        respond {
+            header("Content-Type", "application/json")
+            bodyAsset("receipt.json")
+        }
+    }
+}
+```
+
+Готовая Android-реализация resolver есть в [DebugMocks.kt](sample/src/debug/kotlin/dev/androidmock/sample/DebugMocks.kt). Она открывает файл внутри `mock/bodies`, читает его с лимитом и закрывает поток. Построение правил с assets выполняйте вне главного потока. После публикации ответы хранятся в памяти; новые запросы не читают файл повторно.
+
+Такой resolver можно создать в debug-коде приложения и передать в `receiptRules`:
+
+```kotlin
+import android.content.Context
+import dev.androidmock.core.dsl.BodyAssetResolver
+import java.io.ByteArrayOutputStream
+
+fun assetResolver(context: Context, maxBytes: Int = 1_048_576): BodyAssetResolver {
+    require(maxBytes > 0)
+    return BodyAssetResolver { path ->
+        context.assets.open("mock/bodies/$path").use { input ->
+            val output = ByteArrayOutputStream()
+            val chunk = ByteArray(8192)
+            while (true) {
+                val count = input.read(chunk)
+                if (count < 0) break
+                require(count <= maxBytes - output.size()) { "Mock asset too large" }
+                output.write(chunk, 0, count)
+            }
+            output.toByteArray()
+        }
+    }
+}
+```
+
+Например, положите `{"orderId":42}` в `src/debug/assets/mock/bodies/receipt.json`, затем выполните `engine.replaceRules(receiptRules(assetResolver(context)))` вне главного потока. Запрос `GET /v1/receipt` получит это тело.
+
+DSL отклоняет абсолютные пути, `.` и `..`, пустые сегменты и обратную косую черту. Отсутствующий файл или ошибка чтения дают `ConfigurationException`. В JVM-тестах resolver может брать байты из ресурсов или памяти. Assets содержат тела ответов; JSON-манифесты правил и исполнение `.kts` не поддерживаются.
+
+## Обновление правил
+
+Сохраняйте экземпляр `RuleEngine`, переданный клиентам, и меняйте его правила через публичные операции:
 
 ```kotlin
 import dev.androidmock.core.dsl.mockRules
 import dev.androidmock.core.engine.RuleEngine
 import dev.androidmock.core.rule.RuleId
 
-fun demonstrateUpdates(): Boolean {
-    val engine = RuleEngine()
+fun updateUsers(engine: RuleEngine) {
     engine.replaceRules(mockRules {
         rule("users", "/v1/users") { respond { bodyText("first version") } }
     })
+
     val updatedRule = mockRules {
         rule("users", "/v1/users") { respond { bodyText("second version") } }
     }.single()
     engine.upsertRule(updatedRule)
+    // Теперь уже созданные клиенты получают second version.
+
     engine.resetScenarios()
-    return engine.removeRule(RuleId("users"))
+    engine.removeRule(RuleId("users"))
+    // Без другого подходящего правила следующий запрос завершится NoMatchingRule.
 }
 ```
 
-| Операция | Таблица и счётчики |
+`replaceRules` пригодится для переключения всего набора моков, `upsertRule` — для изменения одного ответа во время работы. Также можно добавить новое правило: передайте `upsertRule` правило с новым ID. `removeRule` убирает отдельный мок, а `resetScenarios` позволяет заново пройти циклический сценарий.
+
+| Операция | Результат |
 | --- | --- |
-| `replaceRules(rules)` | Полностью заменяет набор. Все сценарии начинаются с нуля, даже для тех же ID и тех же правил. Пустой список отключает все совпадения. |
-| `upsertRule(rule)` | Заменяет правило с тем же ID, сохраняя позицию регистрации; новый ID добавляет в конец. Сбрасывает старый и новый сценарные ключи затронутого правила. Остальные продолжаются. |
-| `removeRule(id)` | Возвращает `true` при удалении и сбрасывает его ключ у оставшихся правил. Если ID отсутствует, возвращает `false` и не меняет состояние. |
-| `resetScenarios()` | Сохраняет таблицу и начинает все её сценарии с нуля. |
+| `replaceRules(rules)` | Заменяет весь набор и сбрасывает все сценарии. Пустой список оставляет клиент без совпадающих правил. |
+| `upsertRule(rule)` | Заменяет правило с тем же ID, сохраняя его место в порядке регистрации; новый ID добавляет в конец. Сбрасывает затронутые сценарные ключи. |
+| `removeRule(id)` | Удаляет правило и сбрасывает его сценарный ключ. Возвращает `false`, если ID не найден. |
+| `resetScenarios()` | Сбрасывает все счётчики, сохраняя правила. |
 
-Если затронутый ключ — `Shared`, его последовательность начинается заново для **всех** правил с этим ключом. Повторный `upsertRule` того же объекта также сбрасывает затронутые ключи.
+Для общего ключа `Shared` сброс затрагивает все правила с этим ключом. Обновление публикуется атомарно: уже начатый запрос может завершиться по старому набору, а следующий увидит новый. Ошибка построения или проверки сохраняет прежние правила и счётчики. Контракт конкурентных обновлений описан в [архитектуре ядра](docs/android-mock/02-core-architecture.md#сценарии-и-состояние).
 
-Проверка набора происходит до атомарной публикации. Ошибка построения DSL или отклонённое обновление сохраняют прежние правила и курсоры. Конкурентный запрос захватывает одну версию таблицы вместе с её счётчиками: начатый до обновления может завершиться по старой версии, новый после публикации видит новую. Callback не удерживает блокировку изменения правил.
+## Ограничения и ошибки
 
-## Прямое использование ядра
+Сопоставление тела запроса работает по байтам, без семантического сравнения JSON. OkHttp по умолчанию не захватывает тело. Для небольшого повторяемого тела включите `RequestBodyCapture.REPEATABLE` в `MockInterceptor`; одноразовые, duplex-тела и тела неизвестной длины не читаются. Ktor предоставляет байты `OutgoingContent.ByteArrayContent`, а потоковые каналы не читает. Если тело недоступно или превышает лимит, условия тела не совпадут, но правило без этих условий может сработать.
 
-Для unit-теста или своего адаптера достаточно `mock-core`. Kotlin DSL создаёт обычные `Rule`, но их можно построить непосредственно:
-
-```kotlin
-import dev.androidmock.core.engine.Decision
-import dev.androidmock.core.engine.RuleEngine
-import dev.androidmock.core.request.HeaderEntry
-import dev.androidmock.core.request.RequestBodySnapshot
-import dev.androidmock.core.request.RequestSnapshots
-import dev.androidmock.core.response.ResponseBody
-import dev.androidmock.core.response.ResponseSpec
-import dev.androidmock.core.rule.ExactPath
-import dev.androidmock.core.rule.RequestMatcher
-import dev.androidmock.core.rule.Rule
-import dev.androidmock.core.rule.RuleId
-import dev.androidmock.core.rule.StaticResponder
-
-fun checkPing(): String {
-    val engine = RuleEngine()
-    engine.replaceRules(listOf(
-        Rule(
-            id = RuleId("ping"),
-            path = ExactPath("/ping"),
-            matcher = RequestMatcher { it.method == "POST" },
-            responder = StaticResponder(
-                ResponseSpec(body = ResponseBody.Bytes("pong".toByteArray(Charsets.UTF_8)))
-            ),
-        )
-    ))
-    val request = RequestSnapshots.fromUrl(
-        method = "POST",
-        originalUrl = "https://api.example.test/ping",
-        headers = listOf(HeaderEntry("Accept", "text/plain")),
-        body = RequestBodySnapshot.Buffered("ping".toByteArray(Charsets.UTF_8)),
-    )
-    return when (val decision = engine.decide(request)) {
-        is Decision.Mock -> when (val body = decision.response.body) {
-            ResponseBody.Empty -> ""
-            is ResponseBody.Bytes -> body.bytes.toString(Charsets.UTF_8)
-        }
-        is Decision.Fail -> error("Mock failed: ${decision.error.javaClass.simpleName}")
-    }
-}
-```
-
-`RequestSnapshots.fromUrl` проверяет метод, URL и заголовки; при неверном входе бросает `InvalidRequestException`. Входные byte arrays и коллекции копируются на границах. `Decision.Mock` содержит `response` и `ruleId`, `Decision.Fail` — `error`. Engine сам не открывает сеть, не ждёт `response.delay` и не создаёт потоков или coroutine scope.
-
-| Состояние тела запроса | Смысл |
-| --- | --- |
-| `RequestBodySnapshot.Absent` | Тело не было задано. |
-| `RequestBodySnapshot.Buffered(bytes)` | Байты доступны для body predicates; пустой массив допустим. |
-| `RequestBodySnapshot.Unavailable(reason)` | Тело существует, но не захвачено. Причины: `ONE_SHOT`, `STREAMING`, `TOO_LARGE`, `UNSUPPORTED`. |
-
-Публичные типы распределены по пакетам `dev.androidmock.core.request`, `.response`, `.rule`, `.engine` и `.dsl`.
-
-## OkHttp и Retrofit
-
-Подключайте `MockInterceptor` через `addInterceptor` в тот `OkHttpClient`, который передаётся приложению. Это application interceptor: сетевой transport не вызывается. Interceptors, добавленные раньше него, могут подготовить запрос; mock-адаптер завершает цепочку, поэтому расположенные после него не вызываются.
-
-Пример фабрики с захватом небольшого повторяемого тела:
+Пример OkHttp-клиента с захватом тела для условий `bodyExact...` и `bodyContains...`:
 
 ```kotlin
 import dev.androidmock.core.engine.RuleEngine
@@ -533,115 +512,19 @@ fun createMockOkHttp(engine: RuleEngine): OkHttpClient = OkHttpClient.Builder()
     .build()
 ```
 
-| Исходящее тело | Снимок |
-| --- | --- |
-| Тела нет | `Absent` |
-| One-shot | `Unavailable(ONE_SHOT)`; не читается |
-| Duplex | `Unavailable(STREAMING)`; не читается |
-| `RequestBodyCapture.NONE` — по умолчанию | `Unavailable(UNSUPPORTED)` для прочих тел; не читается |
-| `REPEATABLE`, но длина неизвестна | `Unavailable(STREAMING)`; не читается |
-| `REPEATABLE`, длина или фактически записанные bytes больше лимита | `Unavailable(TOO_LARGE)` |
-| `REPEATABLE`, известная длина в пределах лимита | `Buffered` после ограниченного захвата |
+Захват вызывает `RequestBody.writeTo`, поэтому включайте его только для тел, чьё повторное создание безопасно.
 
-`REPEATABLE` вызывает `RequestBody.writeTo` для захвата, поэтому используйте его только для тел, чьё повторное создание безопасно. Превышенный входной лимит не означает автоматический отказ запроса: правила без условий тела всё ещё могут совпасть. Ошибки чтения самого пользовательского `RequestBody` могут пробрасываться как обычные исключения, без `MockFailure`.
-
-Промах, ошибка callback или невалидный ответ дают `MockIOException`, его поле `failure` содержит `MockFailure`. Отмена вызова и прерывание ожидания дают `InterruptedIOException`. Задержка округляется вверх до миллисекунд; проверка отмены выполняется с интервалом до 20 мс во время ожидания.
-
-Для Retrofit достаточно этого клиента. Пример сервиса с сырым телом, которому не нужен JSON converter:
-
-```kotlin
-import okhttp3.OkHttpClient
-import okhttp3.ResponseBody
-import retrofit2.Response
-import retrofit2.Retrofit
-import retrofit2.http.GET
-
-interface UsersApi {
-    @GET("v1/users?page=1")
-    suspend fun users(): Response<ResponseBody>
-}
-
-fun createUsersApi(client: OkHttpClient): UsersApi = Retrofit.Builder()
-    .baseUrl("https://api.example.test/")
-    .client(client)
-    .build()
-    .create(UsersApi::class.java)
-```
-
-Для возврата своего DTO добавьте converter приложения. `bodyJson` отвечает за формирование mock bytes и не устанавливает Retrofit converter. Ответы и их тела закрывайте обычным способом; пример с `response.use` находится в [быстром старте](#быстрый-старт). HTTP-статус ошибки из правила, например `503`, остаётся обычным HTTP-ответом, а `NoMatchingRule` — транспортной ошибкой.
-
-## Ktor Client
-
-`mockKtorEngine` устанавливается при создании отдельного `HttpClient` и становится его единственным транспортом. Пример фабрики и suspend-запроса:
-
-```kotlin
-import dev.androidmock.core.engine.RuleEngine
-import dev.androidmock.ktor.mockKtorEngine
-import io.ktor.client.HttpClient
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
-
-fun createMockKtor(engine: RuleEngine): HttpClient = HttpClient(
-    mockKtorEngine(engine, maxRequestBytes = 1024 * 1024L)
-) {
-    expectSuccess = false
-    // Здесь устанавливаются client plugins приложения.
-}
-
-suspend fun loadKtorUsers(client: HttpClient): String =
-    client.get("https://api.example.test/v1/users?page=1").bodyAsText()
-```
-
-Владелец клиента вызывает `client.close()` по завершении своего scope. Обычные client plugins проходят путь подготовки запроса и обработки ответа; для DTO нужны стандартные настройки клиента. При `expectSuccess = true` Ktor может дополнительно превратить HTTP-статусы ошибок в собственные исключения.
-
-| Тело после преобразования Ktor plugins | Снимок |
-| --- | --- |
-| `OutgoingContent.NoContent` | `Absent` |
-| `OutgoingContent.ByteArrayContent` в пределах лимита | `Buffered` |
-| ByteArrayContent с известной длиной или bytes больше лимита | `Unavailable(TOO_LARGE)` |
-| `ReadChannelContent` / `WriteChannelContent` | `Unavailable(STREAMING)`; каналы не читаются |
-| Другие формы | `Unavailable(UNSUPPORTED)` |
-
-Промах и ошибки engine дают `KtorMockException` с полем `failure`. Coroutine cancellation сохраняется, задержка реализована через `delay`. К уже созданному клиенту с реальным engine этот адаптер не добавляется: смена транспорта требует другого `HttpClient`.
-
-## Лимиты и ошибки
-
-| Настройка | По умолчанию | Где задаётся |
+| Лимит | По умолчанию | Настройка |
 | --- | --- | --- |
-| `maxResponseBytes` | 1 MiB (`1_048_576`) | `EngineLimits`, применяется к каждому ответу |
-| `maxTableBytes` | 16 MiB (`16_777_216`) | `EngineLimits`, сумма тел static и round-robin ответов в таблице |
-| `maxRequestBytes` | 1 MiB | Отдельно в `MockInterceptor` и `mockKtorEngine` |
+| Тело одного ответа | 1 MiB | `EngineLimits.maxResponseBytes` |
+| Сумма заранее заданных тел в таблице | 16 MiB | `EngineLimits.maxTableBytes` |
+| Захватываемое тело запроса | 1 MiB | `maxRequestBytes` в `MockInterceptor` или `mockKtorEngine` |
 
-Лимиты положительные. Пример настройки engine:
+`mockRules` проверяет набор с обычными `EngineLimits()`, поэтому увеличение лимитов целевого движка не позволяет строить через DSL ответы больше этих значений. Для больших ответов создавайте `Rule` напрямую. Вычисляемый ответ проверяется по лимиту одного ответа при каждом `decide`.
 
-```kotlin
-import dev.androidmock.core.engine.EngineLimits
-import dev.androidmock.core.engine.RuleEngine
+Ошибки построения и публикации дают `ConfigurationException`. Ошибки запроса содержат `MockFailure`: `InvalidRequest`, `NoMatchingRule`, `CallbackFailure` или `InvalidResponse`. В OkHttp они приходят как `MockIOException`, в Ktor — как `KtorMockException`; у обоих исключений есть поле `failure`. HTTP-статус из правила остаётся обычным ответом; при `expectSuccess = true` Ktor дополнительно применяет собственную проверку статуса. Отмена сохраняет поведение соответствующего клиента.
 
-val boundedEngine = RuleEngine(EngineLimits(
-    maxResponseBytes = 512 * 1024,
-    maxTableBytes = 8L * 1024 * 1024,
-))
-```
-
-`mockRules` предварительно валидирует результат с **обычными** `EngineLimits()` во временном engine. Поэтому набор DSL сначала ограничен 1 MiB на ответ и 16 MiB на таблицу; более строгий целевой engine проверяет его снова при публикации. Если нужны большие static-ответы, создайте `Rule` напрямую и публикуйте в engine с соответствующими лимитами. Resolver assets отдельно ограничивает чтение ещё до создания `ResponseSpec`.
-
-В сумму таблицы входят все заранее заданные ответы, включая каждый элемент round-robin. Динамическое тело не известно при публикации и не входит в эту сумму; каждый вычисленный ответ проверяется по `maxResponseBytes` при `decide`.
-
-При построении/публикации проверяются ID, дубли правил, path, параметры DSL, заголовки, ровно один responder, непустой round-robin, статус `200..599`, конечная неотрицательная задержка, отсутствие тела для `204`/`304` и размеры. Прямые конструкторы отдельных типов также могут бросать `IllegalArgumentException` до публикации.
-
-| Ошибка | Где и как проявляется |
-| --- | --- |
-| `ConfigurationException` | Построение DSL или отклонённый `replaceRules`/`upsertRule`; прежний набор остаётся активным. |
-| `InvalidRequestException` | Неверный вход `RequestSnapshots.fromUrl`; адаптер переводит его в `MockFailure.InvalidRequest`. |
-| `MockFailure.NoMatchingRule` | Ни одно правило не совпало. Это ошибка вызова, а не автоматический HTTP `404`. |
-| `MockFailure.CallbackFailure` | Исключение matcher/responder; `cause` доступна для диагностики. |
-| `MockFailure.InvalidResponse` | Вычисленный ответ нарушает контракт или лимит. |
-| `MockIOException` / `KtorMockException` | Представление `MockFailure` в соответствующем клиенте. |
-
-При повторной загрузке правил перехватывайте `ConfigurationException` у владельца engine и сохраняйте прежний клиент. При первом запуске ошибка построения должна помешать подключению неполного mock-набора.
-
-Для разбора ошибки OkHttp пример принимает уже созданные клиент и запрос:
+Например, промах можно отличить от других ошибок вызова:
 
 ```kotlin
 import dev.androidmock.core.engine.MockFailure
@@ -663,11 +546,13 @@ fun executeMock(client: OkHttpClient, request: Request): String {
 }
 ```
 
-Для Ktor аналогично проверяйте `KtorMockException.failure`. Не поглощайте отмену клиента. Диагностируйте по ID/типу ошибки; полные URL с query, токены, тела и cause могут содержать чувствительные данные.
+В Ktor аналогично проверяется `KtorMockException.failure`. При ошибке повторной загрузки правил сохраните прежний движок и клиент: неудачная публикация их не меняет. При первом запуске ошибка конфигурации должна остановить создание клиента с неполным набором.
 
-## Сборка, sample и проверки
+В проекте нет глобального перехвата, пропуска несовпавшего запроса в сеть, записи трафика и replay, потоковых мок-ответов, WebSocket/gRPC, шаблонов путей и семантического JSON-матчинга. KMP-публикация пока не настроена. Полный контракт URL, query, тел и ошибок приведён в [архитектуре ядра](docs/android-mock/02-core-architecture.md).
 
-| Компонент | Конфигурация в репозитории |
+## Сборка и проверки
+
+| Компонент | Версия или настройка в репозитории |
 | --- | --- |
 | JDK / Gradle Wrapper | Toolchain 17 / 8.13 |
 | Kotlin / serialization plugin | 2.3.20 / 2.3.20 |
@@ -675,9 +560,9 @@ fun executeMock(client: OkHttpClient, request: Request): String {
 | Android Gradle Plugin | 8.13.2 |
 | `sample` | `minSdk = 23`, `compileSdk = 36`, `targetSdk = 36` |
 | OkHttp / Ktor Client | 4.12.0 / 3.0.3 |
-| Retrofit в integration test | 3.0.0 |
+| Retrofit в интеграционном тесте | 3.0.0 |
 
-Из корня репозитория запускайте:
+Из корня репозитория:
 
 ```shell
 ./gradlew :mock-core:test :mock-okhttp:test :mock-ktor:test
@@ -685,12 +570,14 @@ fun executeMock(client: OkHttpClient, request: Request): String {
 ./gradlew :sample:assembleDebugAndroidTest
 ```
 
-Для полного штатного Gradle build также доступен `./gradlew build`. JVM tests проверяют ядро, DSL, публикацию и сценарии, OkHttp/Retrofit и Ktor. Android SDK нужен для `sample`; устройство требуется только для instrumentation:
+Полная сборка с JVM-тестами запускается через `./gradlew build`. Для `sample` нужен Android SDK. На подключённом устройстве или эмуляторе тест assets запускается отдельно:
 
 ```shell
 ./gradlew :sample:connectedDebugAndroidTest
 ```
 
-`sample` содержит [DebugMocks.kt](sample/src/debug/kotlin/dev/androidmock/sample/DebugMocks.kt): composition root строит правила из debug asset и подключает один engine к обоим клиентам. Это пример интеграции без пользовательского экрана выбора сценариев. [PackagedAssetTest.kt](sample/src/androidTest/kotlin/dev/androidmock/sample/PackagedAssetTest.kt) проверяет чтение упакованного файла через `targetContext.assets` и отсутствие повторного чтения при `decide`.
+В [sample](sample/src/debug/kotlin/dev/androidmock/sample/DebugMocks.kt) один движок подключён к OkHttp и Ktor. Экрана выбора сценариев в нём нет. [PackagedAssetTest.kt](sample/src/androidTest/kotlin/dev/androidmock/sample/PackagedAssetTest.kt) проверяет чтение файла из APK через `targetContext.assets` и отсутствие повторного чтения при `decide`.
 
-В указанной конфигурации прошла команда `./gradlew build :sample:assembleDebugAndroidTest`: 46 JVM-тестов без ошибок, debug/release APK и debug test APK собраны, `lintDebug` завершился без ошибок. Instrumentation ранее прошёл на Android 36 AVD (`Medium_Phone`, 1 тест); при обновлении toolchain не перезапускался. Другие Android API levels и вариант реального приложения-потребителя ещё не проверены.
+По ранее зафиксированным результатам `./gradlew build :sample:assembleDebugAndroidTest` прошли 46 JVM-тестов, собраны debug/release APK и debug test APK, `lintDebug` завершился без ошибок. Тест assets ранее прошёл на Android 36 AVD (`Medium_Phone`, 1 тест); после обновления toolchain его не запускали повторно. Другие Android API levels и сборка реального приложения-потребителя ещё не проверены.
+
+Порядок разработки и отложенные задачи описаны в [плане проекта](docs/android-mock/01-project-plan.md).
