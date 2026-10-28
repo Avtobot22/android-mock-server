@@ -2,13 +2,16 @@
 
 Библиотека HTTP-моков для Android и JVM. В Kotlin-коде вы описываете, какой ответ должен получить запрос, и подключаете правила к OkHttp или Ktor Client. Так можно разрабатывать приложение без готового бэкенда, показывать демо и проверять клиентский код.
 
-Библиотека работает внутри приложения и не открывает сетевой порт. Она обрабатывает запросы только тех клиентов, к которым подключена. Если подходящего правила нет, запрос завершается ошибкой `NoMatchingRule` без обращения в сеть. HTTP `404` или `503` нужно задать отдельным ответом в правиле.
+Для OkHttp есть два режима: безпортовый `MockInterceptor` и отдельный HTTP-транспорт `LoopbackMockServer` на `127.0.0.1` с динамическим портом. Второй нужен для штатного `Authenticator`, повторных запросов и сетевых timeout. Ktor использует безпортовый `MockEngine`. Во всех режимах правила и сценарии обслуживает тот же `RuleEngine`.
+
+Если правила нет, результат ядра - `NoMatchingRule`. Перехватчик и Ktor завершают вызов типизированной ошибкой; loopback-транспорт возвращает диагностический HTTP 599 с отдельным заголовком. Обращения к upstream нет. Обычные HTTP `404` или `503` задаются ответом в правиле.
 
 ## Содержание
 
 - [Как обрабатывается запрос](#как-обрабатывается-запрос)
 - [Подключение](#подключение)
 - [Быстрый старт с OkHttp и Retrofit](#быстрый-старт-с-okhttp)
+- [HTTP-транспорт и OkHttp Authenticator](#http-транспорт-и-okhttp-authenticator)
 - [Ktor Client](#подключение-ktor-client)
 - [Правила и ответы](#правила-и-ответы)
 - [Тела из Android assets](#тела-ответов-из-android-assets)
@@ -22,15 +25,15 @@
 | --- | --- |
 | `mock-core` | Хранит правила, сопоставляет запросы, выбирает ответы и ведёт счётчики сценариев. Содержит Kotlin DSL; не зависит от Android, OkHttp и Ktor. |
 | `mock-okhttp` | Подключает правила через interceptor OkHttp. Работает и с Retrofit, если передать ему этот клиент. |
+| `mock-okhttp-server` | Запускает loopback HTTP-сервер на MockWebServer 4.12.0; сохраняет штатные OkHttp auth/follow-up и сетевые timeout. |
 | `mock-ktor` | Создаёт Ktor `MockEngine` для отдельного `HttpClient`. |
-| `sample` | Показывает подключение обоих клиентов и загрузку тела ответа из Android assets. Содержит тест упакованного файла. |
 
 ## Как обрабатывается запрос
 
 1. Приложение создаёт `RuleEngine`, описывает правила через `mockRules` и публикует их через `replaceRules`.
 2. Адаптер OkHttp или Ktor переводит запрос в снимок: метод, URL, заголовки и доступные байты тела.
 3. Движок ищет первое подходящее правило и выбирает ответ. Для последовательности ответов он также увеличивает счётчик сценария.
-4. Адаптер выдерживает заданную задержку и возвращает ответ в привычном формате клиента. Если правила нет, возвращает ошибку вызова.
+4. Адаптер выдерживает заданную задержку и возвращает ответ в привычном формате клиента. Если правила нет, возвращает типизированную ошибку вызова или диагностический HTTP-ответ выбранного транспорта.
 
 Приложение продолжает обращаться к тому же API своего сетевого клиента. Мок определяется правилами, а не отдельной функцией загрузки данных. Движок и клиенты сохраняйте на время нужного сценария: создание нового движка начинает его счётчики с нуля.
 
@@ -47,13 +50,14 @@ workspace/
 В `your-app/settings.gradle.kts` добавьте проекты:
 
 ```kotlin
-include(":mock-core", ":mock-okhttp", ":mock-ktor")
+include(":mock-core", ":mock-okhttp", ":mock-okhttp-server", ":mock-ktor")
 project(":mock-core").projectDir = file("../android-mock-server/mock-core")
 project(":mock-okhttp").projectDir = file("../android-mock-server/mock-okhttp")
+project(":mock-okhttp-server").projectDir = file("../android-mock-server/mock-okhttp-server")
 project(":mock-ktor").projectDir = file("../android-mock-server/mock-ktor")
 ```
 
-Если используете только OkHttp, `mock-ktor` можно не подключать, и наоборот. В настройках репозиториев нужны `google()` и `mavenCentral()`. Модули используют JDK toolchain 17; версии Kotlin-плагинов задаёт корневая сборка. В корневом `build.gradle.kts` добавьте недостающие объявления:
+Подключайте только нужные адаптеры: `mock-okhttp` для перехватчика, `mock-okhttp-server` для HTTP-транспорта, `mock-ktor` для Ktor. В настройках репозиториев нужны `google()` и `mavenCentral()`. Модули используют JDK toolchain 17; версии Kotlin-плагинов задаёт корневая сборка. В корневом `build.gradle.kts` приложения добавьте недостающие объявления:
 
 ```kotlin
 plugins {
@@ -72,6 +76,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     debugImplementation(project(":mock-core"))
     debugImplementation(project(":mock-okhttp"))
+    // Для штатного Authenticator вместо mock-okhttp:
+    // debugImplementation(project(":mock-okhttp-server"))
     // Для Ktor вместо mock-okhttp:
     // debugImplementation(project(":mock-ktor"))
 }
@@ -167,6 +173,94 @@ fun createUsersApi(client: OkHttpClient): UsersApi = Retrofit.Builder()
 
 Здесь используется сырое `ResponseBody`, поэтому JSON-converter не нужен. Для метода, возвращающего DTO, настройте converter приложения. Прочитанное тело ответа закрывайте обычным способом.
 
+## HTTP-транспорт и OkHttp Authenticator
+
+`MockInterceptor` возвращает ответ из application interceptor до внутреннего `RetryAndFollowUpInterceptor` OkHttp. Его `401` виден приложению, но не вызывает встроенный `Authenticator`. Этот контракт сохранён и проверен отдельным regression-тестом. Перестановка application interceptors его не меняет; `addNetworkInterceptor(MockInterceptor(...))` нарушает контракт OkHttp.
+
+`mock-okhttp-server` принимает настоящие HTTP-запросы на IPv4 loopback. Приложение сохраняет свою конфигурацию `OkHttpClient`, включая authenticator, и передаёт Retrofit локальную `baseUrl`:
+
+```kotlin
+import dev.androidmock.core.dsl.mockRules
+import dev.androidmock.core.engine.RuleEngine
+import dev.androidmock.okhttp.server.LoopbackMockServer
+import okhttp3.Authenticator
+import okhttp3.OkHttpClient
+import retrofit2.Retrofit
+
+// Вызывайте вне Android main thread. Владельцем server остаётся debug composition root.
+fun createMockRetrofit(createAuthenticator: (okhttp3.HttpUrl) -> Authenticator): Pair<LoopbackMockServer, Retrofit> {
+    val engine = RuleEngine().apply {
+        replaceRules(mockRules {
+            rule("private", "/private") {
+                match { headers { contains("Authorization", "Bearer A2") } }
+                priority(10)
+                respond { bodyText("ok") }
+            }
+            rule("unauthorized", "/private") { respond { status(401) } }
+        })
+    }
+    val server = LoopbackMockServer(engine, logicalBaseUrl = "https://api.example.test/")
+    server.start()
+    try {
+        val client = OkHttpClient.Builder().authenticator(createAuthenticator(server.baseUrl)).build()
+        val retrofit = Retrofit.Builder().baseUrl(server.baseUrl).client(client).build()
+        return server to retrofit
+    } catch (failure: Throwable) {
+        server.close()
+        throw failure
+    }
+}
+```
+
+Converter для DTO добавляет приложение. После `401` реальный OkHttp вызывает переданный `Authenticator`; SDK не получает токены, не делает refresh и не выбирает условия повтора. Authenticator должен ограничивать follow-up и возвращать `null`, если авторизация больше не может помочь. В [интеграционном тесте](mock-okhttp-server/src/test/kotlin/dev/androidmock/okhttp/server/LoopbackAuthenticatorTest.kt) показаны refresh через отдельный Retrofit-клиент и повтор с новым токеном. Фабрика `createAuthenticator` получает локальную базу, чтобы настроить refresh API приложения на этот же адрес. Основной и refresh-клиент используют один `server.baseUrl` и один engine. `MockInterceptor` в эти клиенты не устанавливается.
+
+Публичный API: `LoopbackMockServer(engine, logicalBaseUrl: String? = null, maxRequestBytes: Long = 1_048_576L)`, `start()`, `baseUrl: HttpUrl`, `close()`. `start` вызывается один раз; `baseUrl` доступен только у запущенного сервера. `close` идемпотентно освобождает listener и принятые соединения; сервер нельзя перезапустить. Создание, запуск и закрытие выполняйте вне главного потока. Отдельно закройте принадлежащие приложению клиенты: сервер ими не владеет. Callback правил должен завершаться быстро: произвольный зависший пользовательский код сервер отменить не может.
+
+### URL, тела и задержка
+
+Физический адрес всегда `http://127.0.0.1:<dynamic-port>/`. `logicalBaseUrl` принимает только HTTP(S) origin: корневой путь `/`, без credentials, query и fragment. Ошибочная настройка отклоняется в конструкторе. При `logicalBaseUrl = "https://api.example.test:8443/"` ядро видит scheme `https`, host `api.example.test` и port `8443`; encoded path и query остаются от реального запроса. Сетевой `Host` остаётся физическим. Префикс пути в логической базе запрещён: `/api/private` и `/private` - разные правила. Без логической базы engine видит физический URL. Никакого TLS-соединения с логическим хостом сервер не устанавливает.
+
+Порядок и повторы query/headers сохраняются. Полученные байты тела доступны для matching без `RequestBodyCapture`; нулевое тело представлено как `Absent`. `maxRequestBytes` принимает значения `1..Int.MAX_VALUE` и ограничивает сохраняемый буфер запроса; при превышении ядро получает `Unavailable(TOO_LARGE)`, а не обрезанный JSON. Правила без body-условий могут совпасть. Лимит ограничивает память захвата, а не число переданных по TCP байтов. Лимиты ответов задаёт `EngineLimits`.
+
+Ответ передаёт status, повторные headers и bytes. Служебные framing-заголовки рассчитывает транспорт; тела у `HEAD`, `204`, `304` нет. `bodyJson` и `bodyAsset` работают без изменений DSL. `ResponseSpec.delay` задерживает доставку заголовков, поэтому действуют реальные OkHttp read/call timeout и `Call.cancel()`. Ожидание происходит на серверном потоке и прерывается при закрытии сервера. Отмена клиента завершает клиентский вызов; серверный worker может оставаться в ожидании до конца задержки или `close()`. Слот сценария уже использован, даже если клиент отменил запрос. `replaceRules`, `upsertRule`, `resetScenarios` применяются к тому же engine без перезапуска listener.
+
+### Диагностический HTTP 599
+
+На `Decision.Fail` сервер возвращает **внутренний debug-протокол**, а не статус backend:
+
+```text
+HTTP 599
+X-Android-Mock-Failure: NoMatchingRule
+```
+
+Значение заголовка - одно из `NoMatchingRule`, `InvalidRequest`, `CallbackFailure`, `InvalidResponse`. Ответ не содержит URL, query, request headers/body, exception message или stack trace. `MockServerFailureProtocol.failureName(response)` проверяет статус и известное значение маркера. В debug error mapper потребителя преобразуйте его в свою ошибку конфигурации (например, `MockConfigurationFailure`) до обычного разбора HTTP-ошибок. Сам SDK не вводит доменную ошибку Quizman. Отсутствующий сервер или отказ соединения остаются сетевой ошибкой, без этого маркера. Не используйте зарезервированную комбинацию status/header для обычного правила.
+
+### Android debug и ограничения транспорта
+
+Сервер и fixtures подключаются через `debugImplementation` и `src/debug`; release не должен ссылаться на них. В debug manifest требуется `android.permission.INTERNET`. Для Android 24+ разрешите cleartext только loopback в debug network security config:
+
+```xml
+<!-- src/debug/res/xml/mock_network_security_config.xml -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
+```
+
+```xml
+<!-- src/debug/AndroidManifest.xml: объедините с debug manifest приложения -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:networkSecurityConfig="@xml/mock_network_security_config" />
+</manifest>
+```
+
+Существующую production HTTPS policy сохраняйте в основном manifest. Android 23 не поддерживает per-domain network security config; для приведённой конфигурации loopback используйте API 24+. На API 23 отдельной проверки требует debug-only разрешение cleartext, действующее на всё приложение. Для безпортового режима такое разрешение не нужно. На JVM Android cleartext-настройки не нужны. Здесь `127.0.0.1` - само устройство/эмулятор, `10.0.2.2` не используется.
+
+Транспорт поддерживает обычный HTTP/1.1 REST на локальном TCP-порту. Логический HTTPS origin не создаёт TLS и не меняет secure-cookie policy клиента. TLS/HTTP2, WebSocket, сторонние загрузчики изображений и глобальная маршрутизация не входят в контракт. Только запросы на `baseUrl` попадут в этот engine. Сервер никогда не проксирует промах наружу; внешние URL, proxy и redirect-policy клиента контролирует приложение. Если сценарий содержит redirect, направляйте его на тот же loopback origin либо ограничивайте follow-up на стороне клиента. Совместимость с конкретным приложением-потребителем проверяется отдельно от JVM-тестов SDK.
+
 ## Подключение Ktor Client
 
 Передайте тот же `RuleEngine` в `mockKtorEngine` при создании клиента:
@@ -254,7 +348,7 @@ query {
 }
 ```
 
-`null` означает параметр без `=`, пустая строка — пустое значение после `=`. Имена и значения query чувствительны к регистру; `+` остаётся плюсом. Путь сравнивается в закодированном виде: `/a` и `/%61` различаются.
+`null` означает параметр без `=`, пустая строка - пустое значение после `=`. Имена и значения query чувствительны к регистру; `+` остаётся плюсом. Путь сравнивается в закодированном виде: `/a` и `/%61` различаются.
 
 Повторные блоки `match` добавляют условия. Два вызова `method("GET")` и `method("POST")` не задают альтернативу: используйте отдельные правила или `matching { it.method == "GET" || it.method == "POST" }`.
 
@@ -317,7 +411,7 @@ val jsonRules = mockRules {
 }
 ```
 
-Первое правило использует готовую модель. Во втором можно задать только поля, нужные для сценария: `name` будет `"Guest"`, а `roles` — пустым списком. Сначала применяется явно заданное поле, затем значение по умолчанию из модели, затем стабильное значение по типу. `field` принимает JSON-имя из `@SerialName`; для вложенных объектов есть `objectField`. Неверные типы, неизвестные и повторные поля отклоняются при построении правил. Подробности заполнения и его ограничения описаны в [документе DSL](docs/android-mock/03-mock-dsl.md#json-ответ-по-serializable-модели).
+Первое правило использует готовую модель. Во втором можно задать только поля, нужные для сценария: `name` будет `"Guest"`, а `roles` - пустым списком. Сначала применяется явно заданное поле, затем значение по умолчанию из модели, затем стабильное значение по типу. `field` принимает JSON-имя из `@SerialName`; для вложенных объектов есть `objectField`. Неверные типы, неизвестные и повторные поля отклоняются при построении правил. Правила заполнения пропусков реализованы в [JsonModelDefaults.kt](mock-core/src/main/kotlin/dev/androidmock/core/dsl/JsonModelDefaults.kt).
 
 `bodyJson` добавляет `Content-Type: application/json; charset=utf-8`, если заголовок не задан явно. JSON превращается в байты до публикации правил.
 
@@ -401,11 +495,11 @@ val dynamicRules = mockRules {
 }
 ```
 
-`/v1/price?currency=EUR` вернёт `rule=price; currency=EUR`, запрос без параметра — `rule=price; currency=USD`. Функции `matching` и `respondWith` выполняются синхронно и могут вызываться одновременно: они должны быть быстрыми, потокобезопасными и без I/O. Каждый вычисленный ответ проверяется по контракту и лимиту перед возвратом клиенту.
+`/v1/price?currency=EUR` вернёт `rule=price; currency=EUR`, запрос без параметра - `rule=price; currency=USD`. Функции `matching` и `respondWith` выполняются синхронно и могут вызываться одновременно: они должны быть быстрыми, потокобезопасными и без I/O. Каждый вычисленный ответ проверяется по контракту и лимиту перед возвратом клиенту.
 
 ## Тела ответов из Android assets
 
-Правила храните в `src/debug/kotlin`, файлы ответов — например, в `src/debug/assets/mock/bodies`. Вызов `bodyAsset("receipt.json")` получает байты через переданный приложением `BodyAssetResolver`:
+Правила храните в `src/debug/kotlin`, файлы ответов - например, в `src/debug/assets/mock/bodies`. Вызов `bodyAsset("receipt.json")` получает байты через переданный приложением `BodyAssetResolver`:
 
 ```kotlin
 import dev.androidmock.core.dsl.BodyAssetResolver
@@ -423,7 +517,7 @@ fun receiptRules(resolver: BodyAssetResolver) = mockRules(bodyAssets = resolver)
 }
 ```
 
-Готовая Android-реализация resolver есть в [DebugMocks.kt](sample/src/debug/kotlin/dev/androidmock/sample/DebugMocks.kt). Она открывает файл внутри `mock/bodies`, читает его с лимитом и закрывает поток. Построение правил с assets выполняйте вне главного потока. После публикации ответы хранятся в памяти; новые запросы не читают файл повторно.
+Пример Android resolver ниже открывает файл внутри `mock/bodies`, читает его с лимитом и закрывает поток. Построение правил с assets выполняйте вне главного потока. После публикации ответы хранятся в памяти; новые запросы не читают файл повторно.
 
 Такой resolver можно создать в debug-коде приложения и передать в `receiptRules`:
 
@@ -480,7 +574,7 @@ fun updateUsers(engine: RuleEngine) {
 }
 ```
 
-`replaceRules` пригодится для переключения всего набора моков, `upsertRule` — для изменения одного ответа во время работы. Также можно добавить новое правило: передайте `upsertRule` правило с новым ID. `removeRule` убирает отдельный мок, а `resetScenarios` позволяет заново пройти циклический сценарий.
+`replaceRules` пригодится для переключения всего набора моков, `upsertRule` - для изменения одного ответа во время работы. Также можно добавить новое правило: передайте `upsertRule` правило с новым ID. `removeRule` убирает отдельный мок, а `resetScenarios` позволяет заново пройти циклический сценарий.
 
 | Операция | Результат |
 | --- | --- |
@@ -489,7 +583,7 @@ fun updateUsers(engine: RuleEngine) {
 | `removeRule(id)` | Удаляет правило и сбрасывает его сценарный ключ. Возвращает `false`, если ID не найден. |
 | `resetScenarios()` | Сбрасывает все счётчики, сохраняя правила. |
 
-Для общего ключа `Shared` сброс затрагивает все правила с этим ключом. Обновление публикуется атомарно: уже начатый запрос может завершиться по старому набору, а следующий увидит новый. Ошибка построения или проверки сохраняет прежние правила и счётчики. Контракт конкурентных обновлений описан в [архитектуре ядра](docs/android-mock/02-core-architecture.md#сценарии-и-состояние).
+Для общего ключа `Shared` сброс затрагивает все правила с этим ключом. Обновление публикуется атомарно: уже начатый запрос может завершиться по старому набору, а следующий увидит новый. Ошибка построения или проверки сохраняет прежние правила и счётчики.
 
 ## Ограничения и ошибки
 
@@ -518,11 +612,11 @@ fun createMockOkHttp(engine: RuleEngine): OkHttpClient = OkHttpClient.Builder()
 | --- | --- | --- |
 | Тело одного ответа | 1 MiB | `EngineLimits.maxResponseBytes` |
 | Сумма заранее заданных тел в таблице | 16 MiB | `EngineLimits.maxTableBytes` |
-| Захватываемое тело запроса | 1 MiB | `maxRequestBytes` в `MockInterceptor` или `mockKtorEngine` |
+| Захватываемое тело запроса | 1 MiB | `maxRequestBytes` в `MockInterceptor`, `LoopbackMockServer` или `mockKtorEngine` |
 
 `mockRules` проверяет набор с обычными `EngineLimits()`, поэтому увеличение лимитов целевого движка не позволяет строить через DSL ответы больше этих значений. Для больших ответов создавайте `Rule` напрямую. Вычисляемый ответ проверяется по лимиту одного ответа при каждом `decide`.
 
-Ошибки построения и публикации дают `ConfigurationException`. Ошибки запроса содержат `MockFailure`: `InvalidRequest`, `NoMatchingRule`, `CallbackFailure` или `InvalidResponse`. В OkHttp они приходят как `MockIOException`, в Ktor — как `KtorMockException`; у обоих исключений есть поле `failure`. HTTP-статус из правила остаётся обычным ответом; при `expectSuccess = true` Ktor дополнительно применяет собственную проверку статуса. Отмена сохраняет поведение соответствующего клиента.
+Ошибки построения и публикации дают `ConfigurationException`. Ошибки запроса содержат `MockFailure`: `InvalidRequest`, `NoMatchingRule`, `CallbackFailure` или `InvalidResponse`. В OkHttp они приходят как `MockIOException`, в Ktor - как `KtorMockException`; у обоих исключений есть поле `failure`. Loopback-транспорт вместо исключения передаёт описанный выше HTTP 599 с диагностическим маркером. HTTP-статус из правила остаётся обычным ответом; при `expectSuccess = true` Ktor дополнительно применяет собственную проверку статуса. Отмена сохраняет поведение соответствующего клиента.
 
 Например, промах можно отличить от других ошибок вызова:
 
@@ -548,7 +642,7 @@ fun executeMock(client: OkHttpClient, request: Request): String {
 
 В Ktor аналогично проверяется `KtorMockException.failure`. При ошибке повторной загрузки правил сохраните прежний движок и клиент: неудачная публикация их не меняет. При первом запуске ошибка конфигурации должна остановить создание клиента с неполным набором.
 
-В проекте нет глобального перехвата, пропуска несовпавшего запроса в сеть, записи трафика и replay, потоковых мок-ответов, WebSocket/gRPC, шаблонов путей и семантического JSON-матчинга. KMP-публикация пока не настроена. Полный контракт URL, query, тел и ошибок приведён в [архитектуре ядра](docs/android-mock/02-core-architecture.md).
+В проекте нет глобального перехвата, пропуска несовпавшего запроса в сеть, записи трафика и replay, потоковых мок-ответов, WebSocket/gRPC, шаблонов путей и семантического JSON-матчинга. KMP-публикация пока не настроена.
 
 ## Сборка и проверки
 
@@ -557,27 +651,16 @@ fun executeMock(client: OkHttpClient, request: Request): String {
 | JDK / Gradle Wrapper | Toolchain 17 / 8.13 |
 | Kotlin / serialization plugin | 2.3.20 / 2.3.20 |
 | Serialization runtime | 1.11.0 |
-| Android Gradle Plugin | 8.13.2 |
-| `sample` | `minSdk = 23`, `compileSdk = 36`, `targetSdk = 36` |
-| OkHttp / Ktor Client | 4.12.0 / 3.0.3 |
+| OkHttp / MockWebServer / Ktor Client | 4.12.0 / 4.12.0 / 3.0.3 |
 | Retrofit в интеграционном тесте | 3.0.0 |
 
 Из корня репозитория:
 
 ```shell
-./gradlew :mock-core:test :mock-okhttp:test :mock-ktor:test
-./gradlew :sample:assembleDebug :sample:lintDebug
-./gradlew :sample:assembleDebugAndroidTest
+./gradlew :mock-core:test :mock-okhttp:test :mock-ktor:test :mock-okhttp-server:test
+./gradlew build
 ```
 
-Полная сборка с JVM-тестами запускается через `./gradlew build`. Для `sample` нужен Android SDK. На подключённом устройстве или эмуляторе тест assets запускается отдельно:
+Репозиторий содержит только JVM-модули библиотеки. Для сборки SDK не нужны Android Gradle Plugin, Android SDK или эмулятор. Retrofit используется только в интеграционных тестах; приложение подключает свой runtime и converter.
 
-```shell
-./gradlew :sample:connectedDebugAndroidTest
-```
-
-В [sample](sample/src/debug/kotlin/dev/androidmock/sample/DebugMocks.kt) один движок подключён к OkHttp и Ktor. Экрана выбора сценариев в нём нет. [PackagedAssetTest.kt](sample/src/androidTest/kotlin/dev/androidmock/sample/PackagedAssetTest.kt) проверяет чтение файла из APK через `targetContext.assets` и отсутствие повторного чтения при `decide`.
-
-По ранее зафиксированным результатам `./gradlew build :sample:assembleDebugAndroidTest` прошли 46 JVM-тестов, собраны debug/release APK и debug test APK, `lintDebug` завершился без ошибок. Тест assets ранее прошёл на Android 36 AVD (`Medium_Phone`, 1 тест); после обновления toolchain его не запускали повторно. Другие Android API levels и сборка реального приложения-потребителя ещё не проверены.
-
-Порядок разработки и отложенные задачи описаны в [плане проекта](docs/android-mock/01-project-plan.md).
+Новый транспорт проверяется JVM-тестами: нативный Authenticator, refresh через отдельный Retrofit-клиент, mapping и диагностика, lifecycle, timeout/cancellation, параллельные запросы и обновление правил. Эти проверки не подтверждают сборку Quizman или другого Android-потребителя; её нужно выполнять при интеграции с фактической конфигурацией приложения.

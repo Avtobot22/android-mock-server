@@ -34,6 +34,33 @@ import kotlin.time.Duration.Companion.seconds
 
 class MockInterceptorTest {
 
+	@Test
+	fun applicationInterceptorUnauthorizedResponseDoesNotInvokeAuthenticator() {
+		val authentications = AtomicInteger()
+		val networkRequests = AtomicInteger()
+		val engine = RuleEngine().apply {
+			replaceRules(mockRules {
+				rule("private", "/private") { respond { status(401) } }
+			})
+		}
+		val client = OkHttpClient.Builder()
+			.addInterceptor(MockInterceptor(engine))
+			.authenticator { _, response ->
+				authentications.incrementAndGet()
+				response.request.newBuilder().header("Authorization", "Bearer replacement").build()
+			}
+			.addNetworkInterceptor { chain ->
+				networkRequests.incrementAndGet()
+				chain.proceed(chain.request())
+			}
+			.build()
+		client.newCall(Request.Builder().url("https://example.test/private").build()).execute().use {
+			assertEquals(401, it.code)
+		}
+		assertEquals(0, authentications.get())
+		assertEquals(0, networkRequests.get())
+	}
+
 	private fun rule(body: String, delay: kotlin.time.Duration = kotlin.time.Duration.ZERO) =
 		Rule(
 			RuleId("x"), ExactPath("/x"), responder = StaticResponder(
