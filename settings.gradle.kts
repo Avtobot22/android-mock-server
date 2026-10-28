@@ -13,4 +13,4 @@ dependencyResolutionManagement {
 	}
 }
 rootProject.name = "android-mock-server"
-include(":mock-core", ":mock-okhttp", ":mock-ktor")
+include(":mock-core", ":mock-okhttp", ":mock-okhttp-server", ":mock-ktor")
