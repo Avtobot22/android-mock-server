@@ -4,9 +4,8 @@ import dev.androidmock.core.dsl.mockRules
 import dev.androidmock.core.engine.RuleEngine
 import okhttp3.Request
 import java.io.IOException
-import java.net.InetAddress
+import java.net.ConnectException
 import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -101,12 +100,9 @@ class LoopbackLifecycleTest {
                 thread.join(2_000)
                 assertFalse(thread.isAlive, "Server thread still alive after close: ${thread.name}")
             }
-            assertFailsWith<IOException> {
+            // A closed listener refuses connections; TIME_WAIT may still prevent rebinding its port.
+            assertFailsWith<ConnectException> {
                 Socket().use { it.connect(InetSocketAddress("127.0.0.1", baseUrl.port), 500) }
-            }
-            ServerSocket().use {
-                it.reuseAddress = true
-                it.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), baseUrl.port))
             }
         } finally {
             client.closeTestClient()
