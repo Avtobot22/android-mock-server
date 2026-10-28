@@ -23,7 +23,6 @@
 | `mock-core` | Хранит правила, сопоставляет запросы, выбирает ответы и ведёт счётчики сценариев. Содержит Kotlin DSL; не зависит от Android, OkHttp и Ktor. |
 | `mock-okhttp` | Подключает правила через interceptor OkHttp. Работает и с Retrofit, если передать ему этот клиент. |
 | `mock-ktor` | Создаёт Ktor `MockEngine` для отдельного `HttpClient`. |
-| `sample` | Показывает подключение обоих клиентов и загрузку тела ответа из Android assets. Содержит тест упакованного файла. |
 
 ## Как обрабатывается запрос
 
@@ -423,7 +422,7 @@ fun receiptRules(resolver: BodyAssetResolver) = mockRules(bodyAssets = resolver)
 }
 ```
 
-Готовая Android-реализация resolver есть в [DebugMocks.kt](sample/src/debug/kotlin/dev/androidmock/sample/DebugMocks.kt). Она открывает файл внутри `mock/bodies`, читает его с лимитом и закрывает поток. Построение правил с assets выполняйте вне главного потока. После публикации ответы хранятся в памяти; новые запросы не читают файл повторно.
+Пример Android resolver ниже открывает файл внутри `mock/bodies`, читает его с лимитом и закрывает поток. Построение правил с assets выполняйте вне главного потока. После публикации ответы хранятся в памяти; новые запросы не читают файл повторно.
 
 Такой resolver можно создать в debug-коде приложения и передать в `receiptRules`:
 
@@ -557,8 +556,6 @@ fun executeMock(client: OkHttpClient, request: Request): String {
 | JDK / Gradle Wrapper | Toolchain 17 / 8.13 |
 | Kotlin / serialization plugin | 2.3.20 / 2.3.20 |
 | Serialization runtime | 1.11.0 |
-| Android Gradle Plugin | 8.13.2 |
-| `sample` | `minSdk = 23`, `compileSdk = 36`, `targetSdk = 36` |
 | OkHttp / Ktor Client | 4.12.0 / 3.0.3 |
 | Retrofit в интеграционном тесте | 3.0.0 |
 
@@ -566,18 +563,9 @@ fun executeMock(client: OkHttpClient, request: Request): String {
 
 ```shell
 ./gradlew :mock-core:test :mock-okhttp:test :mock-ktor:test
-./gradlew :sample:assembleDebug :sample:lintDebug
-./gradlew :sample:assembleDebugAndroidTest
+./gradlew build
 ```
 
-Полная сборка с JVM-тестами запускается через `./gradlew build`. Для `sample` нужен Android SDK. На подключённом устройстве или эмуляторе тест assets запускается отдельно:
+Репозиторий содержит только JVM-модули библиотеки. Для сборки SDK не нужны Android Gradle Plugin, Android SDK или эмулятор. Retrofit используется только в интеграционных тестах; приложение подключает свой runtime и converter.
 
-```shell
-./gradlew :sample:connectedDebugAndroidTest
-```
-
-В [sample](sample/src/debug/kotlin/dev/androidmock/sample/DebugMocks.kt) один движок подключён к OkHttp и Ktor. Экрана выбора сценариев в нём нет. [PackagedAssetTest.kt](sample/src/androidTest/kotlin/dev/androidmock/sample/PackagedAssetTest.kt) проверяет чтение файла из APK через `targetContext.assets` и отсутствие повторного чтения при `decide`.
-
-По ранее зафиксированным результатам `./gradlew build :sample:assembleDebugAndroidTest` прошли 46 JVM-тестов, собраны debug/release APK и debug test APK, `lintDebug` завершился без ошибок. Тест assets ранее прошёл на Android 36 AVD (`Medium_Phone`, 1 тест); после обновления toolchain его не запускали повторно. Другие Android API levels и сборка реального приложения-потребителя ещё не проверены.
-
-Порядок разработки и отложенные задачи описаны в [плане проекта](docs/android-mock/01-project-plan.md).
+Интеграция SDK с реальным Android-приложением проверяется отдельно в конфигурации потребителя.
