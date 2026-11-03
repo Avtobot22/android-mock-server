@@ -46,7 +46,7 @@ class LoopbackMappingTest {
             client.get(server.baseUrl, "health").use {
                 assertEquals(201, it.code)
                 assertEquals(listOf("one", "two"), it.headers.values("X-Item"))
-                assertContentEquals(bytes, it.body!!.bytes())
+                assertContentEquals(bytes, it.body.bytes())
             }
         }
     }
@@ -107,7 +107,7 @@ class LoopbackMappingTest {
             client.newCall(request).execute().use {
                 assertEquals(200, it.code)
                 assertEquals("application/json; charset=utf-8", it.header("Content-Type"))
-                assertEquals(json, it.body!!.string())
+                assertEquals(json, it.body.string())
             }
         }
     }
@@ -126,7 +126,7 @@ class LoopbackMappingTest {
         assertEquals(1, reads.get())
         withServer(RuleEngine().apply { replaceRules(rules) }) { server, client ->
             repeat(2) {
-                client.get(server.baseUrl, "asset").use { assertContentEquals(bytes, it.body!!.bytes()) }
+                client.get(server.baseUrl, "asset").use { assertContentEquals(bytes, it.body.bytes()) }
             }
         }
         assertEquals(1, reads.get())
@@ -178,7 +178,7 @@ class LoopbackMappingTest {
                 client.newCall(Request.Builder().url(server.baseUrl.resolve("body")!!).post(body).build())
                     .execute().use {
                         assertEquals(200, it.code)
-                        assertEquals("unavailable", it.body!!.string())
+                        assertEquals("unavailable", it.body.string())
                     }
             }
         }
@@ -197,7 +197,7 @@ class LoopbackMappingTest {
         withServer(engine, maxRequestBytes = 4) { server, client ->
             client.newCall(Request.Builder().url(server.baseUrl.resolve("body")!!)
                 .post("abcd".toRequestBody()).build()).execute().use {
-                assertEquals("matched", it.body!!.string())
+                assertEquals("matched", it.body.string())
             }
         }
     }
@@ -217,17 +217,17 @@ class LoopbackMappingTest {
             client.newCall(head).execute().use {
                 assertEquals(200, it.code)
                 assertEquals("head must omit this".toByteArray().size.toString(), it.header("Content-Length"))
-                assertEquals(0, it.body!!.bytes().size)
+                assertEquals(0, it.body.bytes().size)
             }
             for ((path, status) in listOf("empty" to 204, "unchanged" to 304)) {
                 client.get(server.baseUrl, path).use {
                     assertEquals(status, it.code)
                     assertNull(it.header("Content-Length"))
                     assertNull(it.header("Transfer-Encoding"))
-                    assertEquals(0, it.body!!.bytes().size)
+                    assertEquals(0, it.body.bytes().size)
                 }
             }
-            client.get(server.baseUrl, "next").use { assertEquals("next response", it.body!!.string()) }
+            client.get(server.baseUrl, "next").use { assertEquals("next response", it.body.string()) }
         }
     }
 
@@ -248,7 +248,7 @@ class LoopbackMappingTest {
             repeat(2) {
                 client.get(server.baseUrl, "framing").use {
                     assertEquals(200, it.code)
-                    assertEquals("actual", it.body!!.string())
+                    assertEquals("actual", it.body.string())
                     assertTrue(it.header("Transfer-Encoding") == null || it.header("Content-Length") == null)
                 }
             }

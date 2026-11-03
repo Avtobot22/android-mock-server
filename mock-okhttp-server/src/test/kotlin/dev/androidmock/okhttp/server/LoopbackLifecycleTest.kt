@@ -88,7 +88,7 @@ class LoopbackLifecycleTest {
             assertEquals("http", baseUrl.scheme)
             assertTrue(baseUrl.port > 0)
             assertFailsWith<IllegalStateException> { server.start() }
-            client.get(baseUrl, "health").use { assertEquals("ok", it.body!!.string()) }
+            client.get(baseUrl, "health").use { assertEquals("ok", it.body.string()) }
             val serverThreads = Thread.getAllStackTraces().keys.filter {
                 it.name.startsWith("MockWebServer") && it.name.contains(baseUrl.port.toString())
             }
@@ -179,7 +179,7 @@ class LoopbackLifecycleTest {
         val call = client.newCall(Request.Builder().url(server.baseUrl.resolve("slow")!!).build())
         try {
             val request = executor.submit {
-                try { call.execute().use { it.body?.bytes() } } catch (_: IOException) { }
+                try { call.execute().use { it.body.bytes() } } catch (_: IOException) { }
             }
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             executor.submit { server.close() }.get(2, TimeUnit.SECONDS)

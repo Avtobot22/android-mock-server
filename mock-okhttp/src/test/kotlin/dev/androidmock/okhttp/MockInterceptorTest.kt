@@ -82,7 +82,7 @@ class MockInterceptorTest {
 		response.use {
 			assertEquals(201, it.code)
 			assertEquals(listOf("one", "two"), it.headers.values("X-Mock"))
-			assertEquals("from mock", it.body!!.string())
+			assertEquals("from mock", it.body.string())
 		}
 		val error = assertFailsWith<MockIOException> {
 			client.newCall(Request.Builder().url("https://example.test/missing").build()).execute()
@@ -132,7 +132,7 @@ class MockInterceptorTest {
 		val client = OkHttpClient.Builder().addInterceptor(MockInterceptor(engine)).build()
 		client.newCall(Request.Builder().url("https://example.test/x").head().build()).execute().use {
 			assertEquals(201, it.code)
-			assertEquals(0, it.body!!.bytes().size)
+			assertEquals(0, it.body.bytes().size)
 		}
 	}
 
@@ -148,7 +148,7 @@ class MockInterceptorTest {
 		}
 		val client = OkHttpClient.Builder().addInterceptor(MockInterceptor(engine)).build()
 		client.newCall(Request.Builder().url("https://example.test/x?tag=a&tag=b&flag").build()).execute().use {
-			assertEquals("matched", it.body!!.string())
+			assertEquals("matched", it.body.string())
 		}
 		val error = assertFailsWith<MockIOException> {
 			client.newCall(Request.Builder().url("https://example.test/x?tag=a&tag=b&flag=").build()).execute()
@@ -172,7 +172,7 @@ class MockInterceptorTest {
 			Request.Builder().url("https://example.test/x")
 				.post("abc".toRequestBody()).build()
 		).execute().use {
-			assertEquals("matched", it.body!!.string())
+			assertEquals("matched", it.body.string())
 		}
 		val writes = AtomicInteger()
 		val oneShot = object : RequestBody() {

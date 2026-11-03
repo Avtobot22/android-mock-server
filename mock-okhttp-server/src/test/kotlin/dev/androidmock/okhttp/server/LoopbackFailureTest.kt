@@ -29,7 +29,7 @@ class LoopbackFailureTest {
                 assertEquals(599, it.code)
                 assertEquals("NoMatchingRule", it.header("X-Android-Mock-Failure"))
                 assertEquals("NoMatchingRule", MockServerFailureProtocol.failureName(it))
-                val diagnostic = it.body!!.string()
+                val diagnostic = it.body.string()
                 assertFalse(diagnostic.contains("query-secret"))
                 assertFalse(diagnostic.contains("header-secret"))
                 assertFalse(diagnostic.contains("unknown"))
@@ -42,11 +42,11 @@ class LoopbackFailureTest {
         withServer(RuleEngine()) { server, client ->
             client.newCall(Request.Builder().url(server.baseUrl.resolve("missing")!!).head().build()).execute().use {
                 assertEquals("NoMatchingRule", MockServerFailureProtocol.failureName(it))
-                assertEquals(0, it.body!!.bytes().size)
+                assertEquals(0, it.body.bytes().size)
             }
             client.get(server.baseUrl, "missing").use {
                 assertEquals("NoMatchingRule", MockServerFailureProtocol.failureName(it))
-                assertTrue(it.body!!.string().isNotBlank())
+                assertTrue(it.body.string().isNotBlank())
             }
         }
     }
@@ -116,7 +116,7 @@ class LoopbackFailureTest {
             client.get(server.baseUrl, "callback").use {
                 assertEquals(599, it.code)
                 assertEquals("CallbackFailure", MockServerFailureProtocol.failureName(it))
-                val diagnostic = it.body!!.string()
+                val diagnostic = it.body.string()
                 assertFalse(diagnostic.contains("private-token-secret"))
                 assertFalse(diagnostic.contains("IllegalStateException"))
                 assertFalse(diagnostic.contains("LoopbackFailureTest"))
@@ -153,7 +153,7 @@ class LoopbackFailureTest {
                 client.get(server.baseUrl, "status/$status").use {
                     assertEquals(status, it.code)
                     assertNull(MockServerFailureProtocol.failureName(it))
-                    assertEquals("backend", it.body!!.string())
+                    assertEquals("backend", it.body.string())
                 }
             }
         }

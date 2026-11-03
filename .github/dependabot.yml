@@ -14,6 +14,8 @@ updates:
     groups:
       kotlin:
         patterns:
+          - "jvm"
+          - "plugin.serialization"
           - "org.jetbrains.kotlin:*"
           - "org.jetbrains.kotlin.*"
       ktor:

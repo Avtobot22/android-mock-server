@@ -25,7 +25,7 @@
 | --- | --- |
 | `mock-core` | Хранит правила, сопоставляет запросы, выбирает ответы и ведёт счётчики сценариев. Содержит Kotlin DSL; не зависит от Android, OkHttp и Ktor. |
 | `mock-okhttp` | Подключает правила через interceptor OkHttp. Работает и с Retrofit, если передать ему этот клиент. |
-| `mock-okhttp-server` | Запускает loopback HTTP-сервер на MockWebServer 4.12.0; сохраняет штатные OkHttp auth/follow-up и сетевые timeout. |
+| `mock-okhttp-server` | Запускает loopback HTTP-сервер на MockWebServer 5.5.1; сохраняет штатные OkHttp auth/follow-up и сетевые timeout. |
 | `mock-ktor` | Создаёт Ktor `MockEngine` для отдельного `HttpClient`. |
 
 ## Как обрабатывается запрос
@@ -57,23 +57,23 @@ project(":mock-okhttp-server").projectDir = file("../android-mock-server/mock-ok
 project(":mock-ktor").projectDir = file("../android-mock-server/mock-ktor")
 ```
 
-Подключайте только нужные адаптеры: `mock-okhttp` для перехватчика, `mock-okhttp-server` для HTTP-транспорта, `mock-ktor` для Ktor. В настройках репозиториев нужны `google()` и `mavenCentral()`. Модули используют JDK toolchain 17; версии Kotlin-плагинов задаёт корневая сборка. В корневом `build.gradle.kts` приложения добавьте недостающие объявления:
+Подключайте только нужные адаптеры: `mock-okhttp` для перехватчика, `mock-okhttp-server` для HTTP-транспорта, `mock-ktor` для Ktor. Для зависимостей библиотеки достаточно `mavenCentral()`. Модули используют JDK toolchain 17; версии Kotlin-плагинов задаёт корневая сборка. В корневом `build.gradle.kts` приложения добавьте недостающие объявления:
 
 ```kotlin
 plugins {
-    kotlin("jvm") version "2.3.20" apply false
-    kotlin("plugin.serialization") version "2.3.20" apply false
+    kotlin("jvm") version "2.4.21" apply false
+    kotlin("plugin.serialization") version "2.4.21" apply false
 }
 ```
 
-Сохраните существующие Android-плагины и согласуйте версии Kotlin: `kotlin("android")` в этой конфигурации тоже использует `2.3.20`. Версии всех компонентов репозитория приведены [ниже](#сборка-и-проверки). Подключение к реальному приложению-потребителю ещё не проверено.
+Сохраните существующие Android-плагины и согласуйте версии Kotlin: `kotlin("android")` в этой конфигурации тоже использует `2.4.21`. Версии всех компонентов репозитория приведены [ниже](#сборка-и-проверки). Подключение к реальному приложению-потребителю ещё не проверено.
 
 В Android-приложении, где моки нужны только в debug-сборке, добавьте в `app/build.gradle.kts`:
 
 ```kotlin
 dependencies {
     // Клиент нужен и в release. Если он уже подключён, сохраните свою зависимость.
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.1")
     debugImplementation(project(":mock-core"))
     debugImplementation(project(":mock-okhttp"))
     // Для штатного Authenticator вместо mock-okhttp:
@@ -648,10 +648,10 @@ fun executeMock(client: OkHttpClient, request: Request): String {
 
 | Компонент | Версия или настройка в репозитории |
 | --- | --- |
-| JDK / Gradle Wrapper | Toolchain 17 / 8.13 |
-| Kotlin / serialization plugin | 2.3.20 / 2.3.20 |
-| Serialization runtime | 1.11.0 |
-| OkHttp / MockWebServer / Ktor Client | 4.12.0 / 4.12.0 / 3.0.3 |
+| JDK / Gradle Wrapper | Toolchain 17 / 9.8.2 |
+| Kotlin / serialization plugin | 2.4.21 / 2.4.21 |
+| Serialization runtime | 1.12.0 |
+| OkHttp / MockWebServer / Ktor Client | 5.5.1 / 5.5.1 / 3.6.1 |
 | Retrofit в интеграционном тесте | 3.0.0 |
 
 Из корня репозитория:

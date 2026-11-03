@@ -25,14 +25,14 @@ class LoopbackConcurrencyTest {
                 val requests = (0 until 10).map {
                     executor.submit<String> {
                         check(begin.await(5, TimeUnit.SECONDS))
-                        client.get(server.baseUrl, "sequence").use { response -> response.body!!.string() }
+                        client.get(server.baseUrl, "sequence").use { response -> response.body.string() }
                     }
                 }
                 begin.countDown()
                 val bodies = requests.map { it.get(5, TimeUnit.SECONDS) }
                 assertEquals((0 until 10).map(Int::toString).toSet(), bodies.toSet())
                 engine.resetScenarios()
-                client.get(server.baseUrl, "sequence").use { assertEquals("0", it.body!!.string()) }
+                client.get(server.baseUrl, "sequence").use { assertEquals("0", it.body.string()) }
             } finally {
                 begin.countDown()
                 executor.shutdownNow()
@@ -46,9 +46,9 @@ class LoopbackConcurrencyTest {
         withServer(scenarioEngine()) { first, firstClient ->
             withServer(scenarioEngine()) { second, secondClient ->
                 assertTrue(first.baseUrl.port != second.baseUrl.port)
-                firstClient.get(first.baseUrl, "sequence").use { assertEquals("0", it.body!!.string()) }
-                firstClient.get(first.baseUrl, "sequence").use { assertEquals("1", it.body!!.string()) }
-                secondClient.get(second.baseUrl, "sequence").use { assertEquals("0", it.body!!.string()) }
+                firstClient.get(first.baseUrl, "sequence").use { assertEquals("0", it.body.string()) }
+                firstClient.get(first.baseUrl, "sequence").use { assertEquals("1", it.body.string()) }
+                secondClient.get(second.baseUrl, "sequence").use { assertEquals("0", it.body.string()) }
             }
         }
     }
@@ -73,7 +73,7 @@ class LoopbackConcurrencyTest {
             val executor = Executors.newFixedThreadPool(10)
             try {
                 val requests = (0 until 10).map {
-                    executor.submit<String> { client.get(server.baseUrl, "version").use { it.body!!.string() } }
+                    executor.submit<String> { client.get(server.baseUrl, "version").use { it.body.string() } }
                 }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
                 engine.replaceRules(mockRules {
@@ -81,11 +81,11 @@ class LoopbackConcurrencyTest {
                 })
                 release.countDown()
                 assertEquals(List(10) { "old" }, requests.map { it.get(5, TimeUnit.SECONDS) })
-                client.get(server.baseUrl, "version").use { assertEquals("replacement", it.body!!.string()) }
+                client.get(server.baseUrl, "version").use { assertEquals("replacement", it.body.string()) }
                 engine.upsertRule(mockRules {
                     rule("version", "/version") { respond { bodyText("upserted") } }
                 }.single())
-                client.get(server.baseUrl, "version").use { assertEquals("upserted", it.body!!.string()) }
+                client.get(server.baseUrl, "version").use { assertEquals("upserted", it.body.string()) }
             } finally {
                 release.countDown()
                 executor.shutdownNow()
@@ -136,7 +136,7 @@ class LoopbackConcurrencyTest {
                     try { call.execute().close(); false } catch (_: IOException) { call.isCanceled() }
                 }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
-                client.get(server.baseUrl, "fast").use { assertEquals("fast", it.body!!.string()) }
+                client.get(server.baseUrl, "fast").use { assertEquals("fast", it.body.string()) }
                 call.cancel()
                 assertTrue(request.get(2, TimeUnit.SECONDS))
             } finally {

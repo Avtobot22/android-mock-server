@@ -53,7 +53,7 @@ class LoopbackAuthenticatorTest {
                     .header("Authorization", "Bearer A1").build()).execute().use {
                     assertEquals(200, it.code)
                     assertEquals(401, it.priorResponse!!.code)
-                    assertEquals("authorized", it.body!!.string())
+                    assertEquals("authorized", it.body.string())
                 }
                 assertEquals(1, authentications.get())
                 assertEquals(listOf<String?>("Bearer A1", "Bearer A2"), attempts.toList())
